@@ -23,6 +23,24 @@ const SECTION_LABELS: Record<string, string> = {
   audience: 'Target Audience',
 }
 
+const SECTION_ICONS: Record<string, string> = {
+  title: '📌',
+  description: '📝',
+  problem: '🎯',
+  why: '💡',
+  success: '📊',
+  audience: '👥',
+}
+
+const SECTION_ACCENT: Record<string, string> = {
+  title: 'border-l-indigo-500',
+  description: 'border-l-blue-400',
+  problem: 'border-l-rose-400',
+  why: 'border-l-amber-400',
+  success: 'border-l-emerald-500',
+  audience: 'border-l-purple-400',
+}
+
 function sectionToMarkdown(key: string, data: unknown): string {
   if (!data || typeof data !== 'object') return ''
   const d = data as Record<string, unknown>
@@ -45,26 +63,7 @@ function sectionToMarkdown(key: string, data: unknown): string {
     }
     case 'audience': {
       const personas = Array.isArray(d.personas) ? d.personas : []
-      return `**Primary:** ${d.primary_audience ?? ''}\n${d.secondary_audience ? `\n**Secondary:** ${d.secondary_audience}` : ''}\n\n${personas.map((p) => `- ${p}`).join('\n')}`
-    }
-    case 'open_questions': {
-      const rawGaps = Array.isArray(d.type2_gaps) ? d.type2_gaps : []
-      const conflicts = Array.isArray(d.type1_conflicts) ? d.type1_conflicts as ConflictEntry[] : []
-      const conflictLines = conflicts.map((c) => {
-        const line = `- [${c.severity}] ${c.conflicting_statement} → ${c.proposed_change}`
-        return c.kb_excerpt ? `${line}\n\n  > ${c.kb_excerpt}` : line
-      })
-      const gapLines = rawGaps.map((g) => {
-        if (typeof g === 'string') return `- ${g}`
-        const entry = g as GapEntry
-        return entry.transcript_excerpt
-          ? `- ${entry.question}\n\n  > ${entry.transcript_excerpt}`
-          : `- ${entry.question}`
-      })
-      return [
-        conflicts.length > 0 ? `**KB Conflicts:**\n${conflictLines.join('\n')}` : '',
-        rawGaps.length > 0 ? `**Transcript Gaps:**\n${gapLines.join('\n')}` : '',
-      ].filter(Boolean).join('\n\n')
+      return `**Primary:** ${d.primary_audience ?? ''}${d.secondary_audience ? `\n\n**Secondary:** ${d.secondary_audience}` : ''}\n\n${personas.map((p) => `- ${p}`).join('\n')}`
     }
     default:
       return JSON.stringify(data, null, 2)
@@ -73,14 +72,17 @@ function sectionToMarkdown(key: string, data: unknown): string {
 
 function SkeletonSection({ label }: { label: string }) {
   return (
-    <div className="border border-gray-200 rounded-lg p-4 animate-pulse">
-      <div className="h-5 bg-gray-200 rounded w-1/3 mb-3" />
+    <div className="border border-gray-100 rounded-xl p-5 animate-pulse bg-white">
+      <div className="flex items-center gap-2 mb-4">
+        <div className="h-4 w-4 bg-gray-200 rounded" />
+        <div className="h-4 bg-gray-200 rounded w-28" />
+      </div>
       <div className="space-y-2">
         <div className="h-3 bg-gray-100 rounded w-full" />
         <div className="h-3 bg-gray-100 rounded w-5/6" />
         <div className="h-3 bg-gray-100 rounded w-4/6" />
       </div>
-      <p className="text-xs text-gray-400 mt-2">Generating {label}…</p>
+      <p className="text-xs text-gray-400 mt-3">Generating {label}…</p>
     </div>
   )
 }
@@ -95,11 +97,12 @@ export function PRDViewer({ sections, generating, hallucinations = 0 }: PRDViewe
   const completedKeys = Object.keys(sections)
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       {hallucinations > 0 && (
-        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 flex items-center gap-2">
-          <span className="text-yellow-600 text-sm font-medium">
-            ⚠ {hallucinations} numeric claim{hallucinations !== 1 ? 's' : ''} not found in transcript
+        <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 flex items-center gap-2">
+          <span className="text-lg">⚠️</span>
+          <span className="text-sm text-amber-800 font-medium">
+            {hallucinations} numeric claim{hallucinations !== 1 ? 's' : ''} not found in transcript — verify before approving.
           </span>
         </div>
       )}
@@ -114,13 +117,17 @@ export function PRDViewer({ sections, generating, hallucinations = 0 }: PRDViewe
         if (!data) return null
 
         const md = sectionToMarkdown(key, data)
+        const accent = SECTION_ACCENT[key] ?? 'border-l-gray-300'
 
         return (
-          <div key={key} className="border border-gray-200 rounded-lg p-4">
-            <h3 className="font-semibold text-gray-800 mb-2 text-sm uppercase tracking-wide">
-              {SECTION_LABELS[key]}
-            </h3>
-            <div className="prose prose-sm max-w-none text-gray-700">
+          <div key={key} className={`border border-gray-100 border-l-4 ${accent} rounded-xl p-5 bg-white shadow-sm`}>
+            <div className="flex items-center gap-2 mb-3">
+              <span className="text-base">{SECTION_ICONS[key]}</span>
+              <h3 className="text-xs font-bold text-gray-500 uppercase tracking-widest">
+                {SECTION_LABELS[key]}
+              </h3>
+            </div>
+            <div className="markdown-prose text-sm text-gray-800">
               <ReactMarkdown>{md}</ReactMarkdown>
             </div>
           </div>

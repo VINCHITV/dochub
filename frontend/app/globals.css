@@ -2,20 +2,42 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Force light mode — the app is not dark-mode-ready. */
 :root {
   --background: #ffffff;
-  --foreground: #171717;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --foreground: #111827;
 }
 
 body {
   color: var(--foreground);
   background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Prose styles for ReactMarkdown rendered content.
+   Applied via .markdown-prose wrapper class in PRDViewer. */
+.markdown-prose p       { margin-bottom: 0.5rem; line-height: 1.65; }
+.markdown-prose ul      { list-style: disc; padding-left: 1.4rem; margin-bottom: 0.5rem; }
+.markdown-prose ol      { list-style: decimal; padding-left: 1.4rem; margin-bottom: 0.5rem; }
+.markdown-prose li      { margin-bottom: 0.2rem; line-height: 1.6; }
+.markdown-prose strong  { font-weight: 600; color: #111827; }
+.markdown-prose em      { font-style: italic; }
+.markdown-prose h1      { font-size: 1.125rem; font-weight: 700; margin-bottom: 0.5rem; color: #111827; }
+.markdown-prose h2      { font-size: 1rem; font-weight: 600; margin-bottom: 0.4rem; color: #111827; }
+.markdown-prose h3      { font-size: 0.875rem; font-weight: 600; margin-bottom: 0.3rem; color: #374151; }
+.markdown-prose blockquote {
+  border-left: 3px solid #d1d5db;
+  padding-left: 0.875rem;
+  color: #6b7280;
+  font-style: italic;
+  margin: 0.5rem 0;
+}
+.markdown-prose code {
+  background: #f3f4f6;
+  color: #1f2937;
+  padding: 0.1em 0.3em;
+  border-radius: 3px;
+  font-size: 0.8em;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
 }

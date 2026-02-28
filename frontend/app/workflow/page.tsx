@@ -217,14 +217,18 @@ export default function WorkflowPage() {
       <div className="max-w-4xl mx-auto px-4 py-8">
         <div className="mb-6 flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">{store.projectName || 'DocHub'}</h1>
-            <p className="text-sm text-gray-500">Pipeline progress</p>
+            <h1 className="text-2xl font-bold text-gray-900 tracking-tight">{store.projectName || 'DocHub'}</h1>
+            <p className="text-sm text-gray-400 mt-0.5">AI-powered product requirements pipeline</p>
           </div>
           <button
             onClick={() => { store.reset(); router.replace('/') }}
-            className="text-xs text-gray-400 hover:text-gray-600"
+            className="flex items-center gap-1.5 text-xs font-medium text-gray-400 hover:text-indigo-600 border border-gray-200 hover:border-indigo-300 rounded-lg px-3 py-1.5 transition-colors"
+            title="The knowledge base is shared across projects. Click to start a new project."
           >
-            ← Start over
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+            </svg>
+            New Project
           </button>
         </div>
 
@@ -232,16 +236,19 @@ export default function WorkflowPage() {
 
         {/* Error banner */}
         {(sseError || uploadError || jiraError) && (
-          <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-4 text-sm text-red-700">
-            {sseError || uploadError || jiraError}
+          <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 mb-4 flex items-start gap-2">
+            <span className="text-red-500 mt-0.5 flex-shrink-0">⚠</span>
+            <p className="text-sm text-red-700 font-medium">{sseError || uploadError || jiraError}</p>
           </div>
         )}
 
         {/* Step: Upload */}
         {(currentStep === 'upload') && (
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 space-y-4">
-            <h2 className="font-semibold text-gray-800">Upload Meeting Transcript</h2>
-            <p className="text-sm text-gray-500">Accepts .txt or .docx files</p>
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 space-y-4">
+            <div>
+              <h2 className="font-semibold text-gray-900 text-base">Upload Meeting Transcript</h2>
+              <p className="text-sm text-gray-500 mt-0.5">Accepts .txt or .docx files</p>
+            </div>
 
             <div
               className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center cursor-pointer hover:border-blue-400 transition-colors"
