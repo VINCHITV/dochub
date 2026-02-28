@@ -20,6 +20,15 @@ interface OpenQuestionsPanelProps {
   regenerating?: boolean
 }
 
+function formatDate(dateStr: string): string {
+  if (!dateStr) return ''
+  try {
+    return new Date(dateStr).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
+  } catch {
+    return dateStr
+  }
+}
+
 function ConflictItem({
   conflict,
   answer,
@@ -31,13 +40,21 @@ function ConflictItem({
 }) {
   const key = `conflict:${conflict.source_prd_id}`
   const sev = conflict.severity ?? 'minor'
+  const docLabel = conflict.source_doc_name || conflict.source_prd_id
+  const docDate = conflict.doc_date ? formatDate(conflict.doc_date) : ''
+
   return (
     <div className="border border-gray-200 rounded-lg p-4 space-y-2">
-      <div className="flex items-center gap-2">
-        <span className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${SEVERITY_STYLES[sev] ?? SEVERITY_STYLES.minor}`}>
+      {/* Header: severity badge + source doc reference */}
+      <div className="flex items-start gap-2 flex-wrap">
+        <span className={`text-xs font-semibold px-2 py-0.5 rounded-full border flex-shrink-0 ${SEVERITY_STYLES[sev] ?? SEVERITY_STYLES.minor}`}>
           {sev.replace('_', ' ')}
         </span>
-        <span className="text-xs text-gray-400 font-mono">{conflict.source_prd_id}</span>
+        <div className="min-w-0">
+          <span className="text-xs font-medium text-gray-700">{docLabel}</span>
+          {docDate && <span className="text-xs text-gray-400 ml-1.5">· {docDate}</span>}
+          <span className="text-xs text-gray-300 font-mono ml-1.5">({conflict.source_prd_id})</span>
+        </div>
       </div>
 
       <p className="text-sm text-gray-800 font-medium">{conflict.conflicting_statement}</p>
@@ -47,9 +64,21 @@ function ConflictItem({
       </p>
 
       {conflict.kb_excerpt && (
-        <blockquote className="border-l-4 border-gray-300 pl-3 text-xs text-gray-500 italic">
-          {conflict.kb_excerpt}
-        </blockquote>
+        <div>
+          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">Previous decision (from PRD)</p>
+          <blockquote className="border-l-4 border-amber-300 bg-amber-50 pl-3 py-1 text-xs text-gray-600 italic rounded-r">
+            {conflict.kb_excerpt}
+          </blockquote>
+        </div>
+      )}
+
+      {conflict.transcript_excerpt && (
+        <div>
+          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">Current transcript says</p>
+          <blockquote className="border-l-4 border-indigo-300 bg-indigo-50 pl-3 py-1 text-xs text-gray-600 italic rounded-r">
+            {conflict.transcript_excerpt}
+          </blockquote>
+        </div>
       )}
 
       <div>

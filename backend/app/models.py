@@ -107,6 +107,12 @@ class Project(SQLModel, table=True):
         ),
     )
 
+    # -- Creator attribution --
+    created_by: str = Field(
+        default="",
+        description="Name of the PM or user who created the project.",
+    )
+
     # -- Version tags (frozen at PRD generation time) --
     prompt_version: str = Field(
         default=PRD_PROMPT_VERSION,

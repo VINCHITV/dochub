@@ -242,14 +242,34 @@ async def _prd_stream(
         if nws.node.metadata.get("doc_id")
     })
 
-    # Build RAG context string for injection into prompts
+    # Build project_id → project name lookup for KB sources so the LLM can
+    # populate ConflictEntry.source_doc_name with a human-readable name.
+    _kb_project_ids: set[str] = {
+        str(nws.node.metadata.get("project_id", ""))
+        for nws in retrieved_nodes
+        if nws.node.metadata.get("project_id")
+    }
+    _proj_name_map: dict[str, str] = {}
+    if _kb_project_ids:
+        with Session(engine) as _db:
+            _projs = _db.exec(select(Project).where(Project.id.in_(_kb_project_ids))).all()
+            _proj_name_map = {p.id: p.name for p in _projs}
+
+    # Build RAG context string for injection into prompts.
+    # Format includes human-readable project name, doc_id, date, and section so
+    # the LLM can populate ConflictEntry.source_doc_name and .doc_date accurately.
     rag_context_parts: list[str] = []
     for nws in retrieved_nodes:
         meta = nws.node.metadata
         doc_id = meta.get("doc_id", "unknown")
         section = meta.get("section", "")
+        date_str = meta.get("date", "")
+        pid = meta.get("project_id", "")
+        proj_name = _proj_name_map.get(pid, doc_id)
         text = nws.node.get_content()
-        rag_context_parts.append(f"[Source: {doc_id} / {section}]\n{text}")
+        rag_context_parts.append(
+            f"[Source: {proj_name} | ID: {doc_id} | Date: {date_str} | Section: {section}]\n{text}"
+        )
     rag_context = "\n\n---\n\n".join(rag_context_parts) if rag_context_parts else "(No prior knowledge base context available for this product area.)"
 
     # Build Q&A context from saved PM answers (injected into every section prompt
@@ -535,12 +555,16 @@ async def _prd_stream(
         "TYPE 1 — KB Conflicts (structured ConflictEntry objects):\n"
         "  Examine each knowledge base chunk provided. Identify direct contradictions between\n"
         "  what the transcript proposes and what existing PRDs state. For each conflict:\n"
-        "    - source_prd_id: the doc_id from the KB chunk (e.g. 'payments-2024-01-15')\n"
+        "    - source_prd_id: copy the ID value from the [ID: ...] tag in the source header\n"
+        "    - source_doc_name: copy the project name from the [Source: ...] tag (before '|')\n"
+        "    - doc_date: copy the date string from the [Date: ...] tag in the source header\n"
         "    - conflicting_statement: quote the conflicting claim from the KB\n"
         "    - proposed_change: what the transcript proposes instead\n"
         "    - severity: 'blocking' | 'needs_discussion' | 'minor'\n"
         "    - kb_excerpt: copy verbatim the 1-3 sentences from the KB chunk that show the conflict.\n"
         "      Use the exact text from the [Source: ...] sections provided above.\n"
+        "    - transcript_excerpt: copy verbatim the 1-2 sentences from the TRANSCRIPT that\n"
+        "      propose the conflicting change. Use the exact wording from the TRANSCRIPT above.\n"
         "  If there are no conflicts, return an empty list — do NOT hallucinate conflicts.\n\n"
         "TYPE 2 — Transcript Gaps (GapEntry objects):\n"
         "  List questions about ambiguities, missing details, or decisions the transcript\n"

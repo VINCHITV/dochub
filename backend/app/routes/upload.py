@@ -51,6 +51,7 @@ async def upload_transcript(
     file: UploadFile,
     project_name: Annotated[str, Form()],
     db: Annotated[Session, Depends(get_session)],
+    creator_name: Annotated[str, Form()] = "",
 ) -> dict:
     """
     Parse an uploaded transcript file and create a Project in the database.
@@ -107,6 +108,7 @@ async def upload_transcript(
         name=project_name,
         transcript_text=transcript_text,
         status=WorkflowStatus.TRANSCRIPT_UPLOADED,
+        created_by=creator_name,
     )
 
     db.add(project)

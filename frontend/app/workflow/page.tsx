@@ -123,7 +123,7 @@ export default function WorkflowPage() {
   // Upload transcript
   const handleUpload = async () => {
     if (!file || !store.projectName) return
-    const result = await upload(file, store.projectName)
+    const result = await upload(file, store.projectName, store.userName)
     if (result) {
       store.setProjectId(result.project_id)
       store.setStatus('TRANSCRIPT_UPLOADED')
@@ -225,6 +225,11 @@ export default function WorkflowPage() {
           <div>
             <h1 className="text-2xl font-bold text-gray-900 tracking-tight">{store.projectName || 'DocHub'}</h1>
             <p className="text-sm text-gray-400 mt-0.5">AI-powered product requirements pipeline</p>
+            {(store.createdBy || store.userName) && (
+              <p className="text-xs text-gray-400 mt-0.5">
+                Started by <span className="font-medium text-gray-600">{store.createdBy || store.userName}</span>
+              </p>
+            )}
           </div>
           <button
             onClick={() => { store.reset(); router.replace('/') }}

@@ -6,13 +6,16 @@ import { usePipelineStore } from '@/store/pipelineStore'
 
 export default function Home() {
   const [name, setName] = useState('')
+  const [userName, setUserNameLocal] = useState('')
   const router = useRouter()
   const setProjectName = usePipelineStore((s) => s.setProjectName)
+  const setUserName = usePipelineStore((s) => s.setUserName)
 
   const handleStart = () => {
     const trimmed = name.trim()
     if (!trimmed) return
     setProjectName(trimmed)
+    setUserName(userName.trim())
     router.push('/workflow')
   }
 
@@ -48,6 +51,23 @@ export default function Home() {
               />
               <p className="text-xs text-gray-400 mt-1.5">
                 Give the project a descriptive name — it helps the AI generate better context.
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-1.5">
+                Your Name
+              </label>
+              <input
+                type="text"
+                className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition"
+                placeholder="e.g. Sarah Chen"
+                value={userName}
+                onChange={(e) => setUserNameLocal(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleStart()}
+              />
+              <p className="text-xs text-gray-400 mt-1.5">
+                Used to track who initiated this project and made decisions.
               </p>
             </div>
 

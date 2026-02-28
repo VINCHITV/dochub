@@ -20,13 +20,14 @@ export function useFileUpload() {
   const [error, setError] = useState<string | null>(null)
 
   const upload = useCallback(
-    async (file: File, projectName: string): Promise<UploadResult | null> => {
+    async (file: File, projectName: string, creatorName = ''): Promise<UploadResult | null> => {
       setUploading(true)
       setError(null)
       try {
         const fd = new FormData()
         fd.append('file', file)
         fd.append('project_name', projectName)
+        fd.append('creator_name', creatorName)
 
         const res = await fetch(`${API}/upload`, { method: 'POST', body: fd })
         if (!res.ok) {

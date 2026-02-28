@@ -21,7 +21,7 @@ EMBEDDING_MODEL: str = "text-embedding-3-small"
 EXTRACTOR_MODEL: str = "gpt-4o"
 """Model used for PRDMetadata extraction (product_area, date, doc_id) after PRD save."""
 
-PRD_PROMPT_VERSION: str = "prd-v1.3"
+PRD_PROMPT_VERSION: str = "prd-v1.4"
 """
 Prompt schema version tag. Increment when any PRD generation prompt changes.
 All Projects store this at generation time so old PRDs can be identified
@@ -29,4 +29,7 @@ and optionally regenerated after a prompt version bump.
 
 prd-v1.3: Added GapEntry model (question + transcript_excerpt) for type2_gaps,
            and kb_excerpt field on ConflictEntry for source evidence display.
+prd-v1.4: Added source_doc_name, doc_date, and transcript_excerpt fields to
+           ConflictEntry. RAG context format enriched with human-readable project
+           name and explicit date tag for LLM extraction.
 """

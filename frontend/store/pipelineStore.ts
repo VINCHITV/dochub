@@ -19,10 +19,13 @@ export interface GapEntry {
 
 export interface ConflictEntry {
   source_prd_id: string
+  source_doc_name?: string
+  doc_date?: string
   conflicting_statement: string
   proposed_change: string
   severity: 'blocking' | 'needs_discussion' | 'minor'
   kb_excerpt?: string
+  transcript_excerpt?: string
 }
 
 export interface PRDSections {
@@ -79,9 +82,11 @@ export interface JiraResult {
 interface PipelineState {
   // Persisted
   projectId: string | null
+  userName: string
 
   // Derived from server — not persisted
   projectName: string
+  createdBy: string
   status: WorkflowStatus | null
   prdSections: PRDSections
   stories: UserStory[]
@@ -93,6 +98,7 @@ interface PipelineState {
   // Actions
   setProjectId: (id: string) => void
   setProjectName: (name: string) => void
+  setUserName: (name: string) => void
   setStatus: (status: WorkflowStatus) => void
   upsertPRDSection: (key: string, data: unknown) => void
   addStory: (story: UserStory) => void
@@ -105,6 +111,7 @@ interface PipelineState {
   rehydrateFromServer: (project: {
     id: string
     name: string
+    created_by?: string
     status: WorkflowStatus
     prd_json?: string
     qa_answers?: Record<string, string>
@@ -114,7 +121,9 @@ interface PipelineState {
 
 const initialState = {
   projectId: null,
+  userName: '',
   projectName: '',
+  createdBy: '',
   status: null,
   prdSections: {},
   stories: [],
@@ -131,6 +140,7 @@ export const usePipelineStore = create<PipelineState>()(
 
       setProjectId: (id) => set({ projectId: id }),
       setProjectName: (name) => set({ projectName: name }),
+      setUserName: (name) => set({ userName: name }),
       setStatus: (status) => set({ status }),
 
       upsertPRDSection: (key, data) =>
@@ -174,6 +184,7 @@ export const usePipelineStore = create<PipelineState>()(
         set({
           projectId: project.id,
           projectName: project.name,
+          createdBy: project.created_by ?? '',
           status: project.status,
           prdSections,
           gapAnswers: project.qa_answers ?? {},
@@ -184,8 +195,8 @@ export const usePipelineStore = create<PipelineState>()(
     }),
     {
       name: 'dochub-pipeline',
-      // Only persist projectId — everything else derived from server
-      partialize: (state) => ({ projectId: state.projectId }),
+      // Persist projectId + userName — everything else derived from server
+      partialize: (state) => ({ projectId: state.projectId, userName: state.userName }),
     }
   )
 )

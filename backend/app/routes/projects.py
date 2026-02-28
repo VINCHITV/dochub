@@ -152,6 +152,7 @@ async def get_project(
     return {
         "id": project.id,
         "name": project.name,
+        "created_by": project.created_by,
         "status": project.status.value,
         "transcript_text": project.transcript_text,
         "prd_json": prd_parsed,

@@ -93,15 +93,21 @@ class ConflictEntry(BaseModel):
     - needs_discussion: stakeholder alignment required, not a hard blocker
     - minor: informational; track but don't block
 
+    source_doc_name: human-readable project name from the KB source tag.
+    doc_date: ISO date string when the prior decision was recorded (from the KB source tag).
     kb_excerpt: verbatim text from the KB chunk that motivated this conflict.
-    Populated by the LLM from the rag_context. Empty string if unavailable.
+    transcript_excerpt: verbatim 1-2 sentences from the current transcript proposing the change.
+    All four are populated by the LLM from the rag_context. Empty string if unavailable.
     """
 
     source_prd_id: str
+    source_doc_name: str = ""
+    doc_date: str = ""
     conflicting_statement: str
     proposed_change: str
     severity: Literal["blocking", "needs_discussion", "minor"]
     kb_excerpt: str = ""
+    transcript_excerpt: str = ""
 
 
 class GapEntry(BaseModel):

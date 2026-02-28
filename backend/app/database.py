@@ -99,6 +99,8 @@ def run_migrations() -> None:
         # T-shirt sizing and transcript references on UserStory
         "ALTER TABLE userstory ADD COLUMN size TEXT DEFAULT 'M'",
         "ALTER TABLE userstory ADD COLUMN transcript_references TEXT DEFAULT '[]'",
+        # Creator attribution on Project
+        "ALTER TABLE project ADD COLUMN created_by TEXT DEFAULT ''",
     ]
 
     with engine.connect() as conn:
