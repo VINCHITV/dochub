@@ -230,12 +230,13 @@ app.add_middleware(
 #    routes import services, services import models, models import versions/workflow —
 #    all of which must be fully loaded before any FastAPI route decorator runs.
 # ---------------------------------------------------------------------------
-from app.routes import export, generate, jira, upload  # noqa: E402
+from app.routes import export, generate, jira, projects, upload  # noqa: E402
 
 app.include_router(upload.router, prefix="/upload", tags=["upload"])
 app.include_router(generate.router, prefix="/generate", tags=["generate"])
 app.include_router(export.router, prefix="/export", tags=["export"])
 app.include_router(jira.router, prefix="/jira", tags=["jira"])
+app.include_router(projects.router, prefix="/projects", tags=["projects"])
 
 # ---------------------------------------------------------------------------
 # 8. Health endpoint — no authentication, no DB call (Railway health check).

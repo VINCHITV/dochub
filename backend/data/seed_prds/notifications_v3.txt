@@ -1,0 +1,65 @@
+Meeting Transcript — Notifications v3: Smart Scheduling and Preferences
+Date: 2024-08-15
+Attendees: Maya Patel (PM), Chris Watkins (Engineering Lead), Anika Johansson (Data Science), Lena Russo (UX Research)
+
+Maya: Let's start with the user research summary. Lena, you ran the survey last month — what are the key findings?
+
+Lena: We had 1,847 survey responses and 24 in-depth user interviews. The headline: notification fatigue is the leading reason users cite for reducing their usage of the platform. 68% of users who reduced their weekly active sessions in the past three months listed "too many notifications" as a contributing factor. Our opt-out rate for notifications is now 31% — up from 19% a year ago. And our app store reviews have a significant cluster around notification volume. In the past 90 days, 14% of 1-star reviews specifically mentioned notifications.
+
+Chris: And when they opt out, they opt out of everything. Our notification system is all-or-nothing at the account level right now. You either get everything or you get nothing. There's no middle ground.
+
+Anika: The data backs that up. After users toggle off notifications, their 7-day retention drops by 34% compared to users who keep notifications on. But here's the thing — among users who leave notifications on, our re-engagement rate from notification clicks is 23%. So notifications work when they're relevant. The problem is we're sending too many and they're not well-targeted.
+
+Maya: What does the notification landscape look like today?
+
+Chris: We have 11 distinct notification types across the product — activity on items you're following, direct messages, weekly digest, system announcements, comment replies, assigned tasks, due date reminders, team updates, product news, streak alerts, and achievement badges. A heavy user can receive over 40 notifications per day across email and push combined. We have zero intelligence in how we schedule them. If an event happens at 2 AM in your time zone, you get a push notification at 2 AM.
+
+Maya: So the goal for v3 is to reverse the opt-out trend and reduce notification-driven churn. The specific targets are: reduce opt-out rate from 31% to below 15% within 6 months, increase notification-driven re-engagement rate from 23% to 35%, and reduce 1-star reviews citing notification issues by 50% within 3 months of launch.
+
+Lena: From our research, there are three features that users specifically requested most. First: quiet hours — let me set a window where I won't get any notifications. Second: per-type preferences — I want task assignment notifications but not achievement badges. Third: digest mode — instead of 12 separate notifications, batch them into one daily or weekly digest.
+
+Anika: I'd add a fourth from the data side: smart delivery timing. We can use each user's historical engagement patterns to predict when they're most likely to be actively using the app. If we deliver notifications during those windows, click-through rates go up and the subjective experience of interruption goes down.
+
+Chris: Let me scope these out technically. Preference center is the foundation — we need a new settings UI with per-type toggles, an interface for quiet hours with time zone awareness, and the ability to set email vs. push preference per notification type. That's a 2-week frontend build and a schema change on the user preferences table.
+
+Chris: Quiet hours backend logic: when an event fires that would trigger a notification, we check if the user is currently in their quiet hours window. If yes, we queue the notification for delivery at the end of the quiet hours window. We need a delivery queue system — we don't have one today, events go directly to the push and email providers. That's the biggest engineering lift.
+
+Anika: For smart timing, I've already built an ML model in the exploration phase. It's a simple multinomial logistic regression on hourly usage features — day of week, time of day, device type, notification type. I'm getting a 18% improvement in click-through rate in the holdout set compared to immediate delivery. The model is small enough to run inference in real-time with a latency under 50ms.
+
+Maya: What's the rollout plan for the ML timing feature?
+
+Anika: I'd recommend a phased rollout. Start with an A/B test on 10% of users for 4 weeks. If we see the click-through improvement replicate in production, ramp to 100% over 2 weeks.
+
+Chris: Digest mode is a batch job that runs at the end of the day or week depending on user preference, aggregates all queued notifications, and sends one email and one push with a summary. The tricky part is the UX — the digest email needs to be well-designed so it feels like a useful roundup, not a wall of text.
+
+Lena: In user research, people wanted the digest to be skimmable. Show me the 3-5 most important things, not all 20 events. We need some notion of notification priority. Activity on my own items is higher priority than activity I'm mentioned in, which is higher priority than activity in my team.
+
+Chris: That's a priority scoring system. Doable but adds scope. Maya, should we ship digest mode with a basic "all events, reverse chronological" and add priority scoring in a follow-up?
+
+Maya: Yes. Ship the basic digest first. Get the user value of batching, iterate on priority scoring once we have usage data.
+
+Chris: On the infrastructure side, the delivery queue is the blocker. I'm thinking we use a Redis-backed job queue — we can use our existing Redis instance. Each pending notification is a job with metadata: user ID, notification type, scheduled delivery time, channel (push/email). A worker process picks up jobs when their scheduled time arrives. This also gives us retry logic for push failures, which we don't have today.
+
+Maya: Open questions for the group: what do we do with notifications that a user queued during quiet hours when their quiet hours end? Do we deliver them all at once, or stagger them?
+
+Chris: Stagger them, definitely. Batch delivery at quiet hours end would feel like spam. I'd suggest a maximum of 3 notifications delivered in the first 10 minutes after quiet hours, then normal flow resumes.
+
+Lena: Users also asked about notification history — a log of everything that was sent in the last 30 days. That's important for cases where they missed something important during quiet hours. It's lower priority but it came up repeatedly.
+
+Maya: Let's put notification history on the backlog. Not v3. What are the dependencies?
+
+Chris: Redis queue setup — DevOps needs to allocate memory for the jobs data structure, they estimated 2 GB additional. Time zone detection — we need accurate time zones for all users; right now we store it for about 60% of accounts. I'll write a backfill job to infer from browser time zone for the rest. And the ML model deployment — Anika's model needs to be wrapped in a FastAPI microservice or integrated into our existing prediction service.
+
+Anika: I'll handle the model deployment. I can have it in staging within two weeks.
+
+Maya: Risk assessment?
+
+Chris: The biggest risk is the delivery queue infrastructure. It's a new component and there's always the risk that under load it doesn't perform as expected. We should load test it with 10x normal traffic before launch. Second risk: if smart timing delays a time-sensitive notification, users might be frustrated. We need to exclude certain notification types from smart timing — direct messages and due date reminders should always be immediate.
+
+Maya: Agreed. Chris, let's add a flag on notification type that marks it as "time-sensitive" and bypasses smart timing. Same flag should probably bypass quiet hours for urgent messages.
+
+Lena: From a research perspective, I want to do a round of usability testing on the preference center UI before we ship. 6-8 sessions, 1 week. Can we build that into the timeline?
+
+Chris: Yes, if design has mocks ready in 2 weeks, we can have a prototype in 3 weeks and run usability testing in week 4. That works.
+
+Maya: Good. Let's target a beta launch in 10 weeks with the preference center, quiet hours, and digest mode. Smart timing goes into A/B test at the same time. GA at 14 weeks if the A/B test is positive.

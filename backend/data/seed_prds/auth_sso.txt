@@ -1,0 +1,53 @@
+Meeting Transcript — Enterprise SSO Integration
+Date: 2024-07-03
+Attendees: Rachel Kim (PM, Enterprise), David Osei (Engineering Lead), Fatima Al-Hassan (Security), Jake Thornton (Sales)
+
+Rachel: Thanks everyone for joining. Jake, I want to start with you — what are enterprise deals actually blocked on right now?
+
+Jake: It's the same story on every call over the past quarter. We have 14 active enterprise opportunities over $50k ARR and nine of them have explicitly said SSO is a hard blocker. Their IT teams won't approve software that requires employees to manage a separate set of credentials. SAML 2.0 is the baseline expectation, and three of those nine deals are also asking for OIDC because they're standardizing on Microsoft Entra ID or Okta.
+
+Rachel: And the deal value?
+
+Jake: If we close even six of those nine, we're looking at $480k in new ARR. We're also bleeding — two companies I was close to landing in Q1 went with a competitor specifically because they had SSO and we didn't. That's probably another $200k lost.
+
+Rachel: David, what's the technical picture?
+
+David: Our auth system right now is email and password only, with optional TOTP 2FA. We built it two years ago and it's reasonably well-structured, but there's no federation layer at all. To add SAML 2.0 properly, we need to implement a Service Provider (SP) metadata endpoint, handle SAML assertions, map external user attributes to our user model, and build the admin UI for IT admins to configure their Identity Provider (IdP).
+
+Fatima: The security requirements here are non-trivial. We need signed SAML assertions — we should reject unsigned assertions from day one. Certificate rotation: IdP certificates expire, and we need a UI flow for admins to upload a new certificate without breaking SSO for their users. And we need robust audit logging — who authenticated when, which IdP, what method. Enterprise security teams will ask for those logs.
+
+David: For OIDC, it's actually lighter to implement than SAML because it's JSON-based and we can use established libraries. The main work is dynamic client registration and handling the authorization code flow. Okta, Entra ID, Google Workspace, and Ping Identity are the IdPs we need to test against.
+
+Rachel: What's the user provisioning story? Some of the enterprise deals asked about SCIM.
+
+David: SCIM is out of scope for this first release. We'll do JIT — Just-In-Time provisioning. When a user authenticates via SSO for the first time and their email domain matches the configured IdP, we create a user record automatically and assign them a default role. IT admins can set that default role from the admin dashboard. SCIM is logged as a future requirement but not P0.
+
+Rachel: What does the admin dashboard look like?
+
+Fatima: Admins need to be able to: upload IdP metadata XML (for SAML) or provide an OIDC discovery URL, configure which email domains are covered by this SSO config, set the default user role for newly provisioned users, download our SP metadata, test the connection before going live, and view authentication event logs filtered by time and user.
+
+David: There's also an important edge case: what happens if an enterprise user tries to log in with email and password after SSO is configured for their domain? We need a policy — either block it entirely or allow it as a fallback for break-glass scenarios. I'd recommend making this a per-domain config option that defaults to blocking.
+
+Rachel: Success metrics. How do we know this launched successfully?
+
+Jake: Enterprise onboarding time is the headline metric. Right now a new enterprise customer takes an average of 11 business days from contract signature to first active user, mostly because our IT onboarding checklist is manual. With SSO, IT should be able to self-serve the IdP configuration, which should cut that to 3 business days or fewer. That's the 60-day target.
+
+Rachel: Other metrics?
+
+Fatima: IT support tickets related to login and password resets — currently about 40 per enterprise per quarter. With SSO, users don't have separate credentials, so that should drop by at least 70%.
+
+David: Auth failure rate — we want SSO auth failures below 0.5% for correctly configured IdPs. And we should track certificate expiry warnings — number of customers who let certificates expire vs. those who rotated proactively via the UI.
+
+Rachel: What are the open risks?
+
+Fatima: SAML has some known attack vectors — XML signature wrapping attacks are the big one. We need a SAML library that's actively maintained and has mitigations for those. I'd recommend python-saml or OneLogin's library. We should not roll our own XML signature validation under any circumstances.
+
+David: The integration testing burden is real. Every IdP has quirks. Okta's SAML implementation handles NameID formats differently from ADFS. We need a test matrix: minimum 4 IdPs by SAML, 3 by OIDC. I'd budget 3 weeks of engineering time just for IdP compatibility testing.
+
+Rachel: Timeline?
+
+David: If we start design and backend scaffolding this sprint, I think we can have a beta with Okta and one OIDC provider in 8 weeks, and full general availability in 12 weeks. That's assuming Fatima's security review runs in parallel with development, not sequentially.
+
+Fatima: I can do that as long as I'm included in design reviews and PR reviews for the auth and crypto-related code. I don't want to see the SAML assertion validation code for the first time in a security review.
+
+Rachel: Agreed. David, let's schedule the first design review for next Monday with Fatima included from the start.

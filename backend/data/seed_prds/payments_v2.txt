@@ -1,0 +1,43 @@
+Meeting Transcript — Payments v2 Checkout
+Date: 2024-06-10
+Attendees: Sarah Chen (PM), Marcus Reyes (Engineering Lead), Priya Nair (Design), Tom Akira (Data)
+
+Sarah: Okay, let's kick off the Payments v2 planning session. The data is pretty alarming — Tom, do you want to share what you found?
+
+Tom: Sure. We analyzed three months of checkout funnel data and we're seeing a 60% drop-off rate at the payment step. That means 6 in 10 users who add items to their cart and reach the payment screen abandon before completing the purchase. Our closest competitor is sitting at around 28% drop-off, which tells us we have a significant UX and trust gap.
+
+Sarah: And the revenue impact?
+
+Tom: Back-of-envelope math: if we get that number to 30%, we're looking at roughly $2.4M in annual incremental revenue based on current traffic. That number only grows as we scale.
+
+Marcus: The core problem is that our current checkout asks users to re-enter card details every single time. We don't support saved payment methods at all right now. So every purchase is a fresh friction wall — 16-digit card number, expiry, CVV, billing address. That's 5 to 7 form fields every time.
+
+Priya: And on mobile it's even worse. The keyboard covers half the screen and auto-fill only works maybe 40% of the time because our form field names don't match browser heuristics. I've watched 12 user session recordings this week and 9 of them involved users mis-typing their card number at least once.
+
+Sarah: So the goal for Payments v2 is to get that drop-off rate to 30% or below within 90 days of launch. We're going to do that through three main features: saved payment methods, Apple Pay and Google Pay integration, and a redesigned order summary sidebar that stays visible through the entire checkout flow.
+
+Marcus: For saved cards, we're integrating with Stripe's payment method API. The user can save up to 5 cards, set a default, and delete any saved method. We'll tokenize everything — we never store raw card numbers ourselves. Stripe holds the token, we hold the reference.
+
+Priya: The checkout experience when you have a saved card should be essentially one click. You see your default card, the order total, and a big "Place Order" button. No re-entry required.
+
+Sarah: What about users without saved cards? First-time checkout flow?
+
+Priya: It's still improved — we're adding a "Save this card" toggle that's opt-in and visible, not buried. Better form field naming for auto-fill compatibility, inline card validation so they know if the number is wrong before they submit, and a card type logo that shows automatically when you start typing.
+
+Marcus: Apple Pay is a priority for mobile Safari. Roughly 55% of our mobile traffic is iOS. With Apple Pay the payment sheet pops up natively from the device, the user authenticates with Face ID or Touch ID, and we get a token back. Zero form fields.
+
+Tom: Our target metrics for the launch: drop-off rate below 30%, average time from cart to confirmation below 90 seconds, Apple Pay adoption above 20% within 60 days, and saved card repeat purchase rate above 40% in the first quarter post-launch.
+
+Sarah: Dependencies? What do we need before we can start?
+
+Marcus: Stripe account upgrade for saved methods — that's already in flight, should be done this week. Apple Pay domain verification — needs to go through App Store approval, takes about 5 business days. And we need a PCI compliance review for the new flow, which legal says will take 2 weeks.
+
+Sarah: Risks?
+
+Marcus: The biggest risk is the PCI review timeline. If legal comes back with required changes, we might need to adjust the card save flow. Low probability but high impact. We should have a fallback plan that launches Apple Pay and the improved first-time flow without saved cards if PCI review drags.
+
+Priya: The order summary sidebar is tricky on mobile because screen real estate is limited. We're planning a sticky bottom bar on mobile that shows the total and a brief item count, and the full sidebar on desktop. We need to QA this carefully across device sizes.
+
+Tom: We also need to instrument the new funnel properly — per-step drop-off, payment method split, error rate by card type. I'll set up the analytics events in parallel with development.
+
+Sarah: Great. Marcus, can your team get us a technical spec for the Stripe integration by end of week? Priya, let's schedule a design review for the one-click checkout flow next Tuesday.
