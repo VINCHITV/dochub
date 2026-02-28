@@ -50,17 +50,19 @@ export default function WorkflowPage() {
   // Rehydrate from server on mount if we have a saved projectId
   useEffect(() => {
     if (didRehydrate.current) return
-    if (!store.projectId) {
+    if (!store.projectId && !store.projectName) {
       router.replace('/')
       return
     }
     didRehydrate.current = true
-    fetch(`${API}/projects/${store.projectId}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
-        if (data) store.rehydrateFromServer(data)
-      })
-      .catch(() => {})
+    if (store.projectId) {
+      fetch(`${API}/projects/${store.projectId}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (data) store.rehydrateFromServer(data)
+        })
+        .catch(() => {})
+    }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // PRD SSE handler
