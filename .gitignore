@@ -1,1 +1,42 @@
-/.idea/
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Env files
+.env
+.env.local
+.env.test
+*.env
+
+# Logs
+*.log
+dochub.log
+
+# DB / vector store
+*.db
+*.sqlite
+chroma_db/
+chroma_db.demo_backup/
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+.turbo/
+
+# macOS
+.DS_Store
+
+# Docker volumes
+postgres-data/

@@ -78,7 +78,7 @@ backend/app/
 └── services/
     ├── ai.py           # All Pydantic section/story models; instructor + AsyncAnthropic wrappers
     ├── rag.py          # HybridRetriever, PRDMetadata extraction on save, KB versioning
-    ├── vector_store.py # Factory: ChromaDB (default) or pgvector (VECTOR_BACKEND=pgvector)
+    ├── vector_store.py # ChromaDB client factory — PersistentClient wrapper used by rag.py
     ├── workflow.py     # WorkflowStatus enum, VALID_TRANSITIONS dict, advance_status()
     ├── docx_builder.py # python-docx export with Heading 1 styles + w:vanish metadata paragraph
     ├── docx_parser.py  # Heading-based re-upload parse; extract_embedded_metadata()
@@ -132,13 +132,13 @@ Final: SSE: {"done": true}
 `advance_status(project_id, expected_current, db)` — idempotent, no `await` between read and write (SQLite serializes writes in single-worker; no optimistic locking needed for hackathon). Jira route checks status before push, advances to `JIRA_PUSH_PENDING` before `asyncio.gather` — prevents double-push on double-click.
 
 ### RAG knowledge base
-- ChromaDB at `./chroma_db` — SINGLE WORKER ONLY
+- **ChromaDB** `PersistentClient` at `./chroma_db` — the committed vector store for this project
+- SINGLE WORKER ONLY — ChromaDB's HNSW binary is process-exclusive (never `uvicorn --workers N`)
 - Chunked with `HierarchicalNodeParser(chunk_sizes=[2048, 512])`
 - Chunk metadata: `doc_id`, `section`, `date`, `product_area`, `status`, `embedding_model`
 - Always filter `MetadataFilter(key="status", value="active")` — prevents retrieving superseded PRDs
 - When saving new PRD: supersede old docs of same `product_area` before indexing new one
 - `HybridRetriever`: ChromaDB semantic + in-memory `rank-bm25` + RRF (k=60)
-- Vector store abstraction: `services/vector_store.py` factory driven by `VECTOR_BACKEND` env var (default: `chroma`; migration: set `VECTOR_BACKEND=pgvector`)
 
 ### RAG conflict detection (prompt framing, not retrieval change)
 Retrieved chunks passed with explicit conflict-check framing, not as generic context. `ConflictEntry` model: `source_prd_id`, `conflicting_statement`, `proposed_change`, `severity` (blocking/needs_discussion/minor). `instructor` enforces structured output.
@@ -271,7 +271,6 @@ JIRA_BASE_URL=            # https://your-domain.atlassian.net
 JIRA_EMAIL=
 JIRA_API_TOKEN=
 JIRA_PROJECT_KEY=
-VECTOR_BACKEND=chroma     # or pgvector for post-hackathon migration
 
 # backend/.env.test
 JIRA_PROJECT_KEY=DOCHUB-TEST  # dedicated test project for integration tests
@@ -290,10 +289,10 @@ NEXT_PUBLIC_API_URL=http://localhost:8000
 - [ ] Verify Jira `DELETE_ISSUES` permission is configured on demo project
 
 ## Post-hackathon migration path
-1. Set `VECTOR_BACKEND=pgvector` + configure Supabase credentials — zero code change
+1. Replace ChromaDB with pgvector (Supabase) — update `vector_store.py` client only; `HybridRetriever` interface unchanged
 2. Migrate to Celery + Redis for background tasks and SSE reconnectability
 3. Add OpenTelemetry spans once an observability backend (Grafana/Tempo) is provisioned
-4. Add Postgres FTS to replace rank-bm25 for the BM25 retrieval leg
+4. Replace `rank-bm25` with Postgres FTS for BM25 at scale
 
 ## Key dependencies
 ```
