@@ -655,18 +655,32 @@ async def _prd_stream(
                     error=str(exc),
                 )
 
-            # Persist PRDMetadata row after successful KB indexing (Fix 4).
-            # Skipped when KB indexing failed — no metadata to record.
+            # Upsert PRDMetadata row after successful KB indexing.
+            # PRDMetadata.project_id has a UNIQUE constraint, so on re-generation
+            # we UPDATE the existing row instead of INSERTing a new one.
+            # Inserting on re-generation would raise an IntegrityError that crashed
+            # the SSE stream silently (done: true was never sent → frontend "network error").
             if kb_index_succeeded:
-                prd_meta = PRDMetadata(
-                    project_id=project_id,
-                    product_area=product_area,
-                    doc_id=f"{product_area}-{date.today().isoformat()}",
-                    date=date.today().isoformat(),
-                    status="active",
-                    embedding_model=EMBEDDING_MODEL,
-                )
-                db.add(prd_meta)
+                existing_meta: Optional[PRDMetadata] = db.exec(
+                    select(PRDMetadata).where(PRDMetadata.project_id == project_id)
+                ).first()
+                if existing_meta is not None:
+                    existing_meta.product_area = product_area
+                    existing_meta.doc_id = f"{product_area}-{date.today().isoformat()}"
+                    existing_meta.date = date.today().isoformat()
+                    existing_meta.status = "active"
+                    existing_meta.embedding_model = EMBEDDING_MODEL
+                    db.add(existing_meta)
+                else:
+                    prd_meta = PRDMetadata(
+                        project_id=project_id,
+                        product_area=product_area,
+                        doc_id=f"{product_area}-{date.today().isoformat()}",
+                        date=date.today().isoformat(),
+                        status="active",
+                        embedding_model=EMBEDDING_MODEL,
+                    )
+                    db.add(prd_meta)
                 db.commit()
 
     # Yield any deferred SSE errors now that the session is closed.

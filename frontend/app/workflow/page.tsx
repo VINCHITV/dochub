@@ -151,6 +151,7 @@ export default function WorkflowPage() {
   // Approve PRD
   const handleApprovePRD = async () => {
     if (!store.projectId) return
+    setSSEError(null)
     const res = await fetch(`${API}/projects/${store.projectId}/approve`, { method: 'POST' })
     if (res.ok) store.setStatus('PRD_APPROVED')
   }
