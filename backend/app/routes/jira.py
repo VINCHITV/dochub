@@ -343,16 +343,16 @@ async def _create_and_store(
     project_key: str,
     story: UserStory,
     adf_desc: dict,
-    ticket_row: Optional[JiraTicket],
-    db: Session,
-) -> tuple[str, str]:
+) -> tuple[str, str, str]:
     """
-    Create one Jira issue and immediately persist issue_key to the JiraTicket row.
+    Create one Jira issue and return (story_id, issue_key, issue_url).
 
-    Storing the key immediately (not at batch-end) ensures the rollback handler
-    can find it via DB query even if the asyncio.gather is interrupted.
+    Does NOT write to the database — the caller collects all results from
+    asyncio.gather and writes them sequentially after gather completes.
+    This avoids concurrent Session access from multiple coroutines sharing a
+    single Session instance.
 
-    Returns (issue_key, issue_url).
+    Returns (story_id, issue_key, issue_url).
     Raises httpx.HTTPStatusError on Jira API failure — propagated to gather caller.
     """
     issue_key, issue_url = await _create_jira_issue(
@@ -363,13 +363,6 @@ async def _create_and_store(
         adf_description=adf_desc,
     )
 
-    # Persist issue_key immediately so rollback can find it
-    if ticket_row is not None:
-        ticket_row.issue_key = issue_key
-        ticket_row.issue_url = issue_url
-        db.add(ticket_row)
-        db.commit()
-
     logger.info(
         "jira.issue_created",
         story_id=story.id,
@@ -377,7 +370,7 @@ async def _create_and_store(
         issue_url=issue_url,
     )
 
-    return issue_key, issue_url
+    return story.id, issue_key, issue_url
 
 
 def _reset_status_to_stories_generated(project_id: str, db: Session) -> None:
@@ -565,7 +558,6 @@ async def push_jira_tickets(
         # --- Create placeholder JiraTicket rows (issue_key=None) ---
         # Written before asyncio.gather so that _execute_rollback can query them
         # by project_id even if issue_key is set only for a subset.
-        ticket_map: dict[str, JiraTicket] = {}  # story.id → JiraTicket row
         for story, _ in story_payloads:
             ticket = JiraTicket(
                 project_id=body.project_id,
@@ -576,13 +568,10 @@ async def push_jira_tickets(
             db.add(ticket)
         db.commit()
 
-        # Reload to get generated IDs and build lookup map
-        for ticket in db.exec(
-            select(JiraTicket).where(JiraTicket.project_id == body.project_id)
-        ).all():
-            ticket_map[ticket.story_id] = ticket
-
         # --- Concurrent Jira issue creation ---
+        # _create_and_store returns (story_id, issue_key, issue_url) without touching
+        # the DB — all DB writes happen sequentially after gather completes, so there
+        # is no concurrent Session access from multiple coroutines.
         # return_exceptions=True delivers exceptions as values so we can inspect all
         # results and roll back only those that succeeded when others failed.
         gather_results = await asyncio.gather(
@@ -593,8 +582,6 @@ async def push_jira_tickets(
                     project_key=project_key,
                     story=story,
                     adf_desc=adf_desc,
-                    ticket_row=ticket_map.get(story.id),
-                    db=db,
                 )
                 for story, adf_desc in story_payloads
             ],
@@ -603,13 +590,27 @@ async def push_jira_tickets(
 
         # --- Inspect results: separate successes from failures ---
         errors: list[str] = []
-        issue_keys: list[str] = []
+        successes: list[tuple[str, str, str]] = []  # (story_id, issue_key, issue_url)
 
         for result in gather_results:
             if isinstance(result, BaseException):
                 errors.append(str(result))
             else:
-                issue_keys.append(result[0])  # (issue_key, issue_url)
+                successes.append(result)  # (story_id, issue_key, issue_url)
+
+        # --- Sequential DB writes for successful creations ---
+        # Write issue_key/issue_url to each placeholder JiraTicket row.
+        # Done before the error check so that _execute_rollback can find the
+        # keys by querying JiraTicket rows even when only some creations succeeded.
+        for story_id, issue_key, issue_url in successes:
+            ticket = db.exec(
+                select(JiraTicket).where(JiraTicket.story_id == story_id)
+            ).first()
+            if ticket is not None:
+                ticket.issue_key = issue_key
+                ticket.issue_url = issue_url
+                db.add(ticket)
+        db.commit()
 
         # --- On ANY failure: rollback all created issues, reset status ---
         if errors:
@@ -632,8 +633,11 @@ async def push_jira_tickets(
                 },
             )
 
-        # --- All creations succeeded: advance to JIRA_PUSH_SUCCESS ---
+        # --- All creations succeeded: advance to JIRA_PUSH_SUCCESS, then COMPLETED ---
+        issue_keys = [s[1] for s in successes]
+
         advance_status(body.project_id, WorkflowStatus.JIRA_PUSH_PENDING, db)
+        advance_status(body.project_id, WorkflowStatus.JIRA_PUSH_SUCCESS, db)
 
         logger.info(
             "jira.push_success",
