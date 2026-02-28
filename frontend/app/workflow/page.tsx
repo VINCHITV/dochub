@@ -565,7 +565,7 @@ export default function WorkflowPage() {
               disabled={pushingJira}
               className="w-full bg-blue-600 text-white rounded-lg py-2.5 text-sm font-semibold hover:bg-blue-700 disabled:opacity-40 transition-colors"
             >
-              {pushingJira ? 'Retrying Jira push…' : 'Retry Jira Push →'}
+              {pushingJira ? 'Retrying Jira push…' : 'Publish Jira Tickets →'}
             </button>
           </div>
         )}
