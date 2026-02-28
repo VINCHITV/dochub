@@ -103,10 +103,21 @@ def _adf_bullet_list(items: list[str]) -> dict:
     }
 
 
+_SIZE_LABELS: dict[str, str] = {
+    "XS": "XS — Extra Small (< 1 day)",
+    "S": "S — Small (1-2 days)",
+    "M": "M — Medium (3-5 days)",
+    "L": "L — Large (6-10 days)",
+    "XL": "XL — Extra Large (> 2 weeks, consider splitting)",
+}
+
+
 def _build_adf_description(
     description: str,
     acceptance_criteria: list[str],
     validations: list[dict],
+    size: str = "M",
+    transcript_references: Optional[list[dict]] = None,
 ) -> dict:
     """
     Build an ADF document for a Jira issue description.
@@ -117,6 +128,10 @@ def _build_adf_description(
     - Bullet list: each AC item
     - Heading 2: Validations  (omitted if validations list is empty)
     - Bullet list: "field: rule — error_message" per validation row
+    - Heading 2: Story Size
+    - Paragraph: T-shirt size label
+    - Heading 2: References  (omitted if no transcript_references)
+    - Bullet list: "Speaker: excerpt [source]" per reference
 
     Returns a complete ADF doc object (type=doc, version=1).
     """
@@ -139,6 +154,22 @@ def _build_adf_description(
             for v in validations
         ]
         content.append(_adf_bullet_list(validation_items))
+
+    # Story Size section
+    content.append(_adf_heading("Story Size", level=2))
+    content.append(_adf_paragraph(_SIZE_LABELS.get(size, f"{size}")))
+
+    # Transcript references section
+    if transcript_references:
+        content.append(_adf_heading("References", level=2))
+        ref_items = []
+        for ref in transcript_references:
+            speaker = ref.get("speaker", "")
+            excerpt = ref.get("excerpt", "")
+            source = ref.get("source", "transcript")
+            prefix = f"{speaker}: " if speaker else ""
+            ref_items.append(f'{prefix}"{excerpt}" [{source}]')
+        content.append(_adf_bullet_list(ref_items))
 
     # ADF requires at least one content node — add an empty paragraph as safety
     if not content:
@@ -337,6 +368,32 @@ async def _delete_jira_issue(
         )
 
 
+async def _update_jira_issue(
+    client: httpx.AsyncClient,
+    base_url: str,
+    issue_key: str,
+    summary: str,
+    adf_description: dict,
+) -> None:
+    """
+    Update an existing Jira issue's summary and description via PUT.
+
+    Gated by _JIRA_CONCURRENCY semaphore. Raises httpx.HTTPStatusError on failure.
+    """
+    payload = {
+        "fields": {
+            "summary": summary,
+            "description": adf_description,
+        }
+    }
+    async with _JIRA_CONCURRENCY:
+        resp = await client.put(
+            f"{base_url}/rest/api/3/issue/{issue_key}",
+            json=payload,
+        )
+    resp.raise_for_status()
+
+
 async def _create_and_store(
     client: httpx.AsyncClient,
     base_url: str,
@@ -371,6 +428,38 @@ async def _create_and_store(
     )
 
     return story.id, issue_key, issue_url
+
+
+async def _update_and_store(
+    client: httpx.AsyncClient,
+    base_url: str,
+    story: UserStory,
+    existing_ticket: JiraTicket,
+    adf_desc: dict,
+) -> tuple[str, str, str]:
+    """
+    Update an existing Jira issue and return (story_id, issue_key, issue_url).
+
+    Does NOT write to the database — the caller writes sequentially after gather.
+    Returns (story_id, issue_key, issue_url).
+    Raises httpx.HTTPStatusError on Jira API failure.
+    """
+    await _update_jira_issue(
+        client=client,
+        base_url=base_url,
+        issue_key=existing_ticket.issue_key,
+        summary=story.title,
+        adf_description=adf_desc,
+    )
+
+    logger.info(
+        "jira.issue_updated",
+        story_id=story.id,
+        issue_key=existing_ticket.issue_key,
+        issue_url=existing_ticket.issue_url,
+    )
+
+    return story.id, existing_ticket.issue_key, existing_ticket.issue_url
 
 
 def _reset_status_to_stories_generated(project_id: str, db: Session) -> None:
@@ -455,26 +544,58 @@ async def _execute_rollback(
 # ---------------------------------------------------------------------------
 
 
+def _build_story_adf(story: UserStory) -> dict:
+    """Parse story JSON fields and build its ADF description payload."""
+    try:
+        ac: list[str] = json.loads(story.acceptance_criteria)
+    except (json.JSONDecodeError, TypeError):
+        ac = [story.acceptance_criteria] if story.acceptance_criteria else []
+    try:
+        validations: list[dict] = json.loads(story.validations)
+    except (json.JSONDecodeError, TypeError):
+        validations = []
+    try:
+        transcript_refs: list[dict] = json.loads(story.transcript_references)
+    except (json.JSONDecodeError, TypeError):
+        transcript_refs = []
+
+    return _build_adf_description(
+        description=story.description,
+        acceptance_criteria=ac,
+        validations=validations,
+        size=getattr(story, "size", "M") or "M",
+        transcript_references=transcript_refs or None,
+    )
+
+
 @router.post("/tickets", status_code=status.HTTP_201_CREATED)
 async def push_jira_tickets(
     body: JiraTicketsRequest,
     db: Annotated[Session, Depends(get_session)],
 ) -> dict:
     """
-    Create Jira issues for all user stories in a project.
+    Smart Jira push for all user stories in a project.
 
-    All-or-nothing: if any single creation fails, ALL created issues are deleted
-    and status is reset to STORIES_GENERATED.
+    Groups stories by action based on their status and existing JiraTicket rows:
+    - open + no ticket  → CREATE new Jira issue
+    - open + has ticket → UPDATE existing Jira issue
+    - obsolete + ticket → DELETE from Jira (not in 'done')
+    - done              → skip always
 
     Returns
     -------
-    {"issue_keys": [str, ...], "count": int}
+    {
+      "created": [{key, url, title, priority}, ...],
+      "updated": [{key, url, title, priority}, ...],
+      "deleted": [{key, title}, ...],
+      "count": int  (total created + updated)
+    }
 
     Raises
     ------
     404  — project not found
     409  — project not in STORIES_GENERATED (wrong state or double-push blocked)
-    422  — no user stories found, or story title exceeds 255 chars
+    422  — no open/obsolete stories found, or story title exceeds 255 chars
     502  — Jira API error (project not found, auth failure, creation failure)
     503  — Jira credentials not configured in env vars
     """
@@ -497,21 +618,55 @@ async def push_jira_tickets(
             ),
         )
 
-    # --- Load user stories ---
+    # --- Load all user stories ---
     stories_stmt = select(UserStory).where(UserStory.project_id == body.project_id)
-    stories: list[UserStory] = list(db.exec(stories_stmt).all())
+    all_stories: list[UserStory] = list(db.exec(stories_stmt).all())
 
-    if not stories:
+    if not all_stories:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="No user stories found for this project. Generate stories first.",
         )
 
+    # --- Load existing JiraTickets keyed by story_id ---
+    tickets_stmt = select(JiraTicket).where(JiraTicket.project_id == body.project_id)
+    existing_tickets: dict[str, JiraTicket] = {
+        t.story_id: t
+        for t in db.exec(tickets_stmt).all()
+        if t.story_id and t.issue_key  # only rows with a real Jira key
+    }
+
+    # --- Categorise stories by action ---
+    # Priority ordering for sorted response: high → medium → low
+    _PRIORITY_ORDER = {"high": 0, "medium": 1, "low": 2}
+
+    to_create: list[UserStory] = []   # open, no existing ticket
+    to_update: list[UserStory] = []   # open, has existing ticket
+    to_delete: list[UserStory] = []   # obsolete, has existing ticket
+    # done stories are always skipped
+
+    for story in all_stories:
+        if story.story_status == "done":
+            continue
+        has_ticket = story.id in existing_tickets
+        if story.story_status == "obsolete":
+            if has_ticket:
+                to_delete.append(story)
+        else:  # open
+            if has_ticket:
+                to_update.append(story)
+            else:
+                to_create.append(story)
+
+    # Sort each group by priority
+    for group in (to_create, to_update, to_delete):
+        group.sort(key=lambda s: _PRIORITY_ORDER.get(s.priority, 1))
+
     # --- Require Jira env vars (raises 503 if missing) ---
     jira_email, jira_token, base_url, project_key = _require_jira_env()
 
-    # --- Pre-validation: story titles <= 255 chars ---
-    for story in stories:
+    # --- Pre-validation: story titles <= 255 chars for create/update ---
+    for story in to_create + to_update:
         if len(story.title) > 255:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -521,88 +676,100 @@ async def push_jira_tickets(
                 ),
             )
 
-    # --- Build ADF payloads for all stories ---
-    story_payloads: list[tuple[UserStory, dict]] = []
-    for story in stories:
-        try:
-            ac: list[str] = json.loads(story.acceptance_criteria)
-        except (json.JSONDecodeError, TypeError):
-            ac = [story.acceptance_criteria]
-        try:
-            validations: list[dict] = json.loads(story.validations)
-        except (json.JSONDecodeError, TypeError):
-            validations = []
-
-        adf_desc = _build_adf_description(
-            description=story.description,
-            acceptance_criteria=ac,
-            validations=validations,
-        )
-        story_payloads.append((story, adf_desc))
-
     auth = httpx.BasicAuth(username=jira_email, password=jira_token)
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
 
     async with httpx.AsyncClient(auth=auth, headers=headers, timeout=30.0) as client:
         # --- Pre-validation: project exists + CREATE_ISSUES permission ---
-        # These raise HTTPException on failure; status is still STORIES_GENERATED here
-        # so a failure before the advance leaves the project in a valid retryable state.
         await _validate_jira_project(client, base_url, project_key)
         await _validate_create_permission(client, base_url, project_key)
 
-        # --- Advance status to JIRA_PUSH_PENDING (prevents double-push on double-click) ---
-        # Any concurrent request that reaches this point after the advance will see
-        # JIRA_PUSH_PENDING and receive a 409 from advance_status's conflict guard.
+        # --- Advance to JIRA_PUSH_PENDING (double-push guard) ---
         advance_status(body.project_id, WorkflowStatus.STORIES_GENERATED, db)
 
-        # --- Create placeholder JiraTicket rows (issue_key=None) ---
-        # Written before asyncio.gather so that _execute_rollback can query them
-        # by project_id even if issue_key is set only for a subset.
-        for story, _ in story_payloads:
-            ticket = JiraTicket(
+        # --- Phase 1: DELETE obsolete stories from Jira (non-fatal on failure) ---
+        deleted_results: list[dict] = []
+        if to_delete:
+            delete_keys = [existing_tickets[s.id].issue_key for s in to_delete]
+            await asyncio.gather(
+                *[_delete_jira_issue(client, base_url, key) for key in delete_keys],
+                return_exceptions=True,
+            )
+            # Record and clean up deleted tickets from DB
+            for story in to_delete:
+                ticket = existing_tickets[story.id]
+                deleted_results.append({"key": ticket.issue_key, "title": story.title})
+                ticket.issue_key = None
+                ticket.issue_url = None
+                db.add(ticket)
+            db.commit()
+
+            logger.info(
+                "jira.obsolete_deleted",
+                project_id=body.project_id,
+                deleted_keys=delete_keys,
+                count=len(delete_keys),
+            )
+
+        # --- Phase 2: UPDATE modified stories concurrently ---
+        update_gather_results: list = []
+        if to_update:
+            update_gather_results = await asyncio.gather(
+                *[
+                    _update_and_store(
+                        client=client,
+                        base_url=base_url,
+                        story=story,
+                        existing_ticket=existing_tickets[story.id],
+                        adf_desc=_build_story_adf(story),
+                    )
+                    for story in to_update
+                ],
+                return_exceptions=True,
+            )
+
+        # --- Phase 3: CREATE new stories concurrently ---
+        # Placeholder JiraTicket rows created before gather for rollback support.
+        for story in to_create:
+            placeholder = JiraTicket(
                 project_id=body.project_id,
                 story_id=story.id,
                 issue_key=None,
                 issue_url=None,
             )
-            db.add(ticket)
+            db.add(placeholder)
         db.commit()
 
-        # --- Concurrent Jira issue creation ---
-        # _create_and_store returns (story_id, issue_key, issue_url) without touching
-        # the DB — all DB writes happen sequentially after gather completes, so there
-        # is no concurrent Session access from multiple coroutines.
-        # return_exceptions=True delivers exceptions as values so we can inspect all
-        # results and roll back only those that succeeded when others failed.
-        gather_results = await asyncio.gather(
-            *[
-                _create_and_store(
-                    client=client,
-                    base_url=base_url,
-                    project_key=project_key,
-                    story=story,
-                    adf_desc=adf_desc,
-                )
-                for story, adf_desc in story_payloads
-            ],
-            return_exceptions=True,
-        )
+        create_gather_results: list = []
+        if to_create:
+            create_gather_results = await asyncio.gather(
+                *[
+                    _create_and_store(
+                        client=client,
+                        base_url=base_url,
+                        project_key=project_key,
+                        story=story,
+                        adf_desc=_build_story_adf(story),
+                    )
+                    for story in to_create
+                ],
+                return_exceptions=True,
+            )
 
-        # --- Inspect results: separate successes from failures ---
-        errors: list[str] = []
-        successes: list[tuple[str, str, str]] = []  # (story_id, issue_key, issue_url)
+        # --- Collect errors from create + update ---
+        create_errors = [str(r) for r in create_gather_results if isinstance(r, BaseException)]
+        update_errors = [str(r) for r in update_gather_results if isinstance(r, BaseException)]
+        all_errors = create_errors + update_errors
 
-        for result in gather_results:
-            if isinstance(result, BaseException):
-                errors.append(str(result))
-            else:
-                successes.append(result)  # (story_id, issue_key, issue_url)
+        create_successes: list[tuple[str, str, str]] = [
+            r for r in create_gather_results if not isinstance(r, BaseException)
+        ]
+        update_successes: list[tuple[str, str, str]] = [
+            r for r in update_gather_results if not isinstance(r, BaseException)
+        ]
 
         # --- Sequential DB writes for successful creations ---
-        # Write issue_key/issue_url to each placeholder JiraTicket row.
-        # Done before the error check so that _execute_rollback can find the
-        # keys by querying JiraTicket rows even when only some creations succeeded.
-        for story_id, issue_key, issue_url in successes:
+        for story_id, issue_key, issue_url in create_successes:
             ticket = db.exec(
                 select(JiraTicket).where(JiraTicket.story_id == story_id)
             ).first()
@@ -612,38 +779,92 @@ async def push_jira_tickets(
                 db.add(ticket)
         db.commit()
 
-        # --- On ANY failure: rollback all created issues, reset status ---
-        if errors:
-            rolled_back = await _execute_rollback(client, base_url, body.project_id, db)
+        # --- On create/update failure: rollback NEWLY CREATED issues, reset status ---
+        if all_errors:
+            # Only rollback newly created tickets (not pre-existing updated ones)
+            new_keys_to_rollback = [s[1] for s in create_successes]
+            if new_keys_to_rollback:
+                await asyncio.gather(
+                    *[_delete_jira_issue(client, base_url, key) for key in new_keys_to_rollback],
+                    return_exceptions=True,
+                )
+                # Clear rolled-back keys from DB
+                for _, issue_key, _ in create_successes:
+                    ticket = db.exec(
+                        select(JiraTicket).where(JiraTicket.issue_key == issue_key)
+                    ).first()
+                    if ticket:
+                        ticket.issue_key = None
+                        ticket.issue_url = None
+                        db.add(ticket)
+                db.commit()
+
             _reset_status_to_stories_generated(body.project_id, db)
 
             logger.error(
                 "jira.push_failed",
                 project_id=body.project_id,
-                errors=errors,
-                rolled_back=rolled_back,
+                errors=all_errors,
+                rolled_back=new_keys_to_rollback,
             )
 
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail={
-                    "message": "Jira push failed — all created issues have been rolled back.",
-                    "errors": errors,
-                    "rolled_back_keys": rolled_back,
+                    "message": "Jira push failed — newly created issues have been rolled back.",
+                    "errors": all_errors,
+                    "rolled_back_keys": new_keys_to_rollback,
                 },
             )
 
-        # --- All creations succeeded: advance to JIRA_PUSH_SUCCESS, then COMPLETED ---
-        issue_keys = [s[1] for s in successes]
+        # --- Build categorised response sorted by priority ---
+        story_map = {s.id: s for s in all_stories}
 
+        created_results: list[dict] = []
+        for story_id, issue_key, issue_url in create_successes:
+            s = story_map.get(story_id)
+            created_results.append({
+                "key": issue_key,
+                "url": issue_url,
+                "title": s.title if s else "",
+                "priority": s.priority if s else "medium",
+            })
+        created_results.sort(key=lambda x: _PRIORITY_ORDER.get(x["priority"], 1))
+
+        updated_results: list[dict] = []
+        for story_id, issue_key, issue_url in update_successes:
+            s = story_map.get(story_id)
+            updated_results.append({
+                "key": issue_key,
+                "url": issue_url,
+                "title": s.title if s else "",
+                "priority": s.priority if s else "medium",
+            })
+        updated_results.sort(key=lambda x: _PRIORITY_ORDER.get(x["priority"], 1))
+
+        # deleted_results already built above; sort by key for consistency
+        deleted_results.sort(key=lambda x: x["key"])
+
+        total_count = len(created_results) + len(updated_results)
+
+        # --- Advance to JIRA_PUSH_SUCCESS → COMPLETED ---
         advance_status(body.project_id, WorkflowStatus.JIRA_PUSH_PENDING, db)
         advance_status(body.project_id, WorkflowStatus.JIRA_PUSH_SUCCESS, db)
 
         logger.info(
             "jira.push_success",
             project_id=body.project_id,
-            issue_keys=issue_keys,
-            count=len(issue_keys),
+            created_count=len(created_results),
+            updated_count=len(updated_results),
+            deleted_count=len(deleted_results),
+            total_count=total_count,
         )
 
-        return {"issue_keys": issue_keys, "count": len(issue_keys)}
+        return {
+            "created": created_results,
+            "updated": updated_results,
+            "deleted": deleted_results,
+            "count": total_count,
+            # Legacy field for backward compat
+            "issue_keys": [r["key"] for r in created_results + updated_results],
+        }

@@ -184,6 +184,14 @@ class UserStory(SQLModel, table=True):
         default="open",
         description="Lifecycle status: 'open' | 'done' | 'obsolete'. Updated by workflow events.",
     )
+    size: str = Field(
+        default="M",
+        description="T-shirt size effort estimate: 'XS' | 'S' | 'M' | 'L' | 'XL'.",
+    )
+    transcript_references: str = Field(
+        default="[]",
+        description="JSON-serialized list[dict] of speaker-attributed transcript/KB references.",
+    )
     created_at: datetime = Field(default_factory=_now)
 
 

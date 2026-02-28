@@ -1,6 +1,6 @@
 'use client'
 
-import { UserStory } from '@/store/pipelineStore'
+import { UserStory, TranscriptRef } from '@/store/pipelineStore'
 
 interface StoriesViewerProps {
   stories: UserStory[]
@@ -14,26 +14,51 @@ const PRIORITY_STYLES: Record<string, string> = {
   low: 'bg-emerald-100 text-emerald-700 border border-emerald-200',
 }
 
+const SIZE_STYLES: Record<string, string> = {
+  XS: 'bg-slate-100 text-slate-600 border border-slate-200',
+  S:  'bg-sky-100 text-sky-700 border border-sky-200',
+  M:  'bg-violet-100 text-violet-700 border border-violet-200',
+  L:  'bg-orange-100 text-orange-700 border border-orange-200',
+  XL: 'bg-red-100 text-red-700 border border-red-200',
+}
+
+const SIZE_LABELS: Record<string, string> = {
+  XS: 'XS · <1 day',
+  S:  'S · 1-2 days',
+  M:  'M · 3-5 days',
+  L:  'L · 6-10 days',
+  XL: 'XL · >2 wks',
+}
+
 const DIFF_STYLES: Record<string, string> = {
-  new: 'bg-emerald-100 text-emerald-700 border border-emerald-200',
+  new:      'bg-emerald-100 text-emerald-700 border border-emerald-200',
   modified: 'bg-blue-100 text-blue-700 border border-blue-200',
-  kept: 'bg-gray-100 text-gray-500 border border-gray-200',
+  kept:     'bg-gray-100 text-gray-500 border border-gray-200',
 }
 
 const DIFF_LABELS: Record<string, string> = {
-  new: '✦ New',
+  new:      '✦ New',
   modified: '↺ Updated',
-  kept: '✓ Kept',
+  kept:     '✓ Kept',
+}
+
+function SectionLabel({ label }: { label: string }) {
+  return (
+    <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mb-2">
+      {label}
+    </p>
+  )
 }
 
 function StoryCard({ story }: { story: UserStory }) {
   const priority = story.priority ?? 'medium'
+  const size = story.size ?? 'M'
+
   return (
-    <div className="border border-gray-200 rounded-xl p-5 bg-white shadow-sm space-y-3 hover:shadow-md transition-shadow">
-      {/* Header */}
+    <div className="border border-gray-200 rounded-xl p-5 bg-white shadow-sm space-y-4 hover:shadow-md transition-shadow">
+      {/* Header row: badges */}
       <div className="flex items-start justify-between gap-3">
-        <h3 className="font-semibold text-gray-900 text-sm leading-snug flex-1">{story.title}</h3>
-        <div className="flex gap-1.5 flex-shrink-0 flex-wrap justify-end">
+        <div className="flex gap-1.5 flex-shrink-0 flex-wrap">
           {story.diff && (
             <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${DIFF_STYLES[story.diff] ?? ''}`}>
               {DIFF_LABELS[story.diff] ?? story.diff}
@@ -42,18 +67,28 @@ function StoryCard({ story }: { story: UserStory }) {
           <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${PRIORITY_STYLES[priority] ?? PRIORITY_STYLES.medium}`}>
             {priority}
           </span>
+          <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${SIZE_STYLES[size] ?? SIZE_STYLES.M}`}>
+            {SIZE_LABELS[size] ?? size}
+          </span>
         </div>
       </div>
 
+      {/* Title */}
+      <div>
+        <SectionLabel label="Title" />
+        <h3 className="font-semibold text-gray-900 text-sm leading-snug">{story.title}</h3>
+      </div>
+
       {/* Description */}
-      <p className="text-sm text-gray-600 italic leading-relaxed">{story.description}</p>
+      <div>
+        <SectionLabel label="Description" />
+        <p className="text-sm text-gray-600 italic leading-relaxed">{story.description}</p>
+      </div>
 
       {/* Acceptance Criteria */}
       {story.acceptance_criteria.length > 0 && (
         <div>
-          <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mb-2">
-            Acceptance Criteria
-          </p>
+          <SectionLabel label="Acceptance Criteria" />
           <ul className="space-y-1">
             {story.acceptance_criteria.map((ac, i) => (
               <li key={i} className="flex items-start gap-2 text-sm text-gray-700">
@@ -68,9 +103,7 @@ function StoryCard({ story }: { story: UserStory }) {
       {/* Validations */}
       {story.validations.length > 0 && (
         <div>
-          <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mb-2">
-            Validations
-          </p>
+          <SectionLabel label="Validations" />
           <div className="rounded-lg border border-gray-100 overflow-hidden">
             <table className="w-full text-xs">
               <thead>
@@ -97,9 +130,7 @@ function StoryCard({ story }: { story: UserStory }) {
       {/* Dependencies */}
       {story.dependencies && story.dependencies.length > 0 && (
         <div>
-          <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mb-2">
-            Dependencies
-          </p>
+          <SectionLabel label="Dependencies" />
           <ul className="space-y-1">
             {story.dependencies.map((dep, i) => (
               <li key={i} className="text-xs text-gray-600 flex items-center gap-1.5">
@@ -114,12 +145,28 @@ function StoryCard({ story }: { story: UserStory }) {
       {/* Reference Links */}
       {story.reference_links && story.reference_links.length > 0 && (
         <div>
-          <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mb-2">
-            References
-          </p>
+          <SectionLabel label="Reference Links" />
           <ul className="space-y-0.5">
             {story.reference_links.map((ref, i) => (
               <li key={i} className="text-xs text-indigo-600 break-all">{ref}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Transcript References */}
+      {story.transcript_references && story.transcript_references.length > 0 && (
+        <div>
+          <SectionLabel label="Transcript References" />
+          <ul className="space-y-2">
+            {story.transcript_references.map((ref: TranscriptRef, i: number) => (
+              <li key={i} className="rounded-lg bg-amber-50 border border-amber-100 px-3 py-2 text-xs">
+                {ref.speaker && (
+                  <span className="font-semibold text-amber-700 mr-1">{ref.speaker}:</span>
+                )}
+                <span className="text-gray-700 italic">&ldquo;{ref.excerpt}&rdquo;</span>
+                <span className="ml-1.5 text-amber-500 font-mono text-[10px]">[{ref.source}]</span>
+              </li>
             ))}
           </ul>
         </div>

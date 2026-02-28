@@ -723,13 +723,17 @@ async def generate_stories(
             detail=f"Project '{body.project_id}' not found.",
         )
 
-    # Allow re-generation from STORIES_GENERATED (produces a diff against existing rows).
-    _allowed_for_stories = {WorkflowStatus.PRD_APPROVED, WorkflowStatus.STORIES_GENERATED}
+    # Allow re-generation from STORIES_GENERATED or COMPLETED (diff against existing rows).
+    _allowed_for_stories = {
+        WorkflowStatus.PRD_APPROVED,
+        WorkflowStatus.STORIES_GENERATED,
+        WorkflowStatus.COMPLETED,
+    }
     if project.status not in _allowed_for_stories:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
-                f"Story generation requires status PRD_APPROVED or STORIES_GENERATED; "
+                f"Story generation requires status PRD_APPROVED, STORIES_GENERATED, or COMPLETED; "
                 f"current status is '{project.status.value}'."
             ),
         )
@@ -750,6 +754,7 @@ async def generate_stories(
         ) from exc
 
     project_id = project.id
+    transcript_text = project.transcript_text or ""
 
     # Load existing stories for diff comparison on re-generation.
     existing_stories: list[UserStory] = list(
@@ -757,7 +762,7 @@ async def generate_stories(
     )
 
     return StreamingResponse(
-        _stories_stream(project_id, prd_data, existing_stories),
+        _stories_stream(project_id, prd_data, existing_stories, transcript_text),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -770,6 +775,7 @@ async def _stories_stream(
     project_id: str,
     prd_data: dict,
     existing_stories: "list[UserStory] | None" = None,
+    transcript_text: str = "",
 ) -> AsyncGenerator[str, None]:
     """
     Async generator for the 3-step user story pipeline.
@@ -859,10 +865,21 @@ async def _stories_stream(
         "- priority: 'high' for must-have features (core user flow, blocking launch), "
         "'medium' for should-have (significant value, not launch-blocking), "
         "'low' for nice-to-have (enhancement, can defer). Base this on business impact from the PRD.\n"
+        "- size: T-shirt effort estimate for engineering scope:\n"
+        "  * XS: less than 1 day (trivial UI tweak, config change, copy update)\n"
+        "  * S: 1-2 days (simple feature with clear spec and no unknowns)\n"
+        "  * M: 3-5 days (standard feature: design + implement + test, some integration)\n"
+        "  * L: 6-10 days (complex feature spanning multiple components or services)\n"
+        "  * XL: more than 2 weeks (large feature; consider splitting into smaller stories)\n"
+        "  Base size on technical complexity implied by the acceptance criteria and scope.\n"
         "- dependencies: list of OTHER story titles (from the same slice list) that must be "
         "completed before this story can begin. Use exact story titles. Empty list if none.\n"
         "- reference_links: list of documentation URLs or knowledge base references relevant "
-        "to this story. Empty list if none."
+        "to this story. Empty list if none.\n"
+        "- transcript_references: 1-3 verbatim speaker quotes from the transcript that directly "
+        "motivate or support this story. Each entry has speaker (name from transcript, empty if unknown), "
+        "excerpt (1-2 verbatim sentences), and source ('transcript'). "
+        "Only include quotes that genuinely support this story. Empty list if none apply."
     )
 
     # Collect all generated story models before diffing and persisting.
@@ -872,11 +889,18 @@ async def _stories_stream(
     for idx, slice_description in enumerate(slices):
         yield _HEARTBEAT
 
+        transcript_excerpt = transcript_text[:3000] if transcript_text else ""
         user_story_prompt = (
             f"PRD CONTEXT:\n{prd_summary}\n\n"
             f"SLICE TO IMPLEMENT:\n{slice_description}\n\n"
             f"CAPABILITIES:\n{capabilities_text}\n\n"
-            f"Write a complete user story for slice {idx + 1} of {len(slices)}."
+            + (
+                f"TRANSCRIPT (use for speaker attribution in transcript_references):\n"
+                f"{transcript_excerpt}\n\n"
+                if transcript_excerpt
+                else ""
+            )
+            + f"Write a complete user story for slice {idx + 1} of {len(slices)}."
         )
 
         try:
@@ -915,8 +939,10 @@ async def _stories_stream(
                     acceptance_criteria=json.dumps(sm.acceptance_criteria),
                     validations=json.dumps([v.model_dump() for v in sm.validations]),
                     priority=sm.priority,
+                    size=sm.size,
                     dependencies=json.dumps(sm.dependencies),
                     reference_links=json.dumps(sm.reference_links),
+                    transcript_references=json.dumps([r.model_dump() for r in sm.transcript_references]),
                     story_status="open",
                 )
                 db.add(story_row)
@@ -933,8 +959,10 @@ async def _stories_stream(
                     existing_row.acceptance_criteria = json.dumps(sm.acceptance_criteria)
                     existing_row.validations = json.dumps([v.model_dump() for v in sm.validations])
                     existing_row.priority = sm.priority
+                    existing_row.size = sm.size
                     existing_row.dependencies = json.dumps(sm.dependencies)
                     existing_row.reference_links = json.dumps(sm.reference_links)
+                    existing_row.transcript_references = json.dumps([r.model_dump() for r in sm.transcript_references])
                     db.add(existing_row)
                     db.commit()
                 story_id = entry.existing_id
@@ -968,8 +996,10 @@ async def _stories_stream(
                 "acceptance_criteria": sm.acceptance_criteria,
                 "validations": [v.model_dump() for v in sm.validations],
                 "priority": sm.priority,
+                "size": sm.size,
                 "dependencies": sm.dependencies,
                 "reference_links": sm.reference_links,
+                "transcript_references": [r.model_dump() for r in sm.transcript_references],
                 "story_status": "open" if entry.classification in ("new", "modified") else "done",
             },
             "diff": entry.classification,
@@ -977,23 +1007,26 @@ async def _stories_stream(
 
     # ------------------------------------------------------------------
     # Advance workflow: PRD_APPROVED → STORIES_GENERATED
-    # Re-generation from STORIES_GENERATED: already at the correct status.
-    # advance_status is idempotent — calling it when already at STORIES_GENERATED
-    # returns without error (it just detects it's already there).
+    # Re-generation from STORIES_GENERATED: already at the correct status (no-op).
+    # Re-generation from COMPLETED: directly reset to STORIES_GENERATED so the
+    # user can push to Jira again with the smart diff-aware push.
     # ------------------------------------------------------------------
-    advance_error: Optional[str] = None
     with Session(engine) as db:
-        try:
-            advance_status(project_id, WorkflowStatus.PRD_APPROVED, db)
-        except HTTPException as exc:
-            # 409 here means the status was not PRD_APPROVED — i.e. it was
-            # STORIES_GENERATED (re-generation pass). That is expected and fine.
-            if "STORIES_GENERATED" not in exc.detail:
-                advance_error = exc.detail
-
-    if advance_error is not None:
-        yield _sse({"error": f"Workflow advance failed: {advance_error}", "done": True})
-        return
+        stmt = select(Project).where(Project.id == project_id)
+        p = db.exec(stmt).first()
+        if p is not None:
+            if p.status == WorkflowStatus.PRD_APPROVED:
+                try:
+                    advance_status(project_id, WorkflowStatus.PRD_APPROVED, db)
+                except HTTPException as exc:
+                    yield _sse({"error": f"Workflow advance failed: {exc.detail}", "done": True})
+                    return
+            elif p.status == WorkflowStatus.COMPLETED:
+                # Re-generation from COMPLETED: reset to STORIES_GENERATED for re-push.
+                p.status = WorkflowStatus.STORIES_GENERATED
+                db.add(p)
+                db.commit()
+            # else: already STORIES_GENERATED — no-op
 
     yield _sse({"done": True})
 

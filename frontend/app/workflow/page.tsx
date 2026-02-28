@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { usePipelineStore, UserStory, WorkflowStatus, ConflictEntry } from '@/store/pipelineStore'
+import { usePipelineStore, UserStory, WorkflowStatus, ConflictEntry, JiraResult } from '@/store/pipelineStore'
 import { WizardStepper } from '@/components/WizardStepper'
 import { PRDViewer } from '@/components/PRDViewer'
 import { StoriesViewer } from '@/components/StoriesViewer'
@@ -175,8 +175,13 @@ export default function WorkflowPage() {
         body: JSON.stringify({ project_id: store.projectId }),
       })
       if (!res.ok) throw new Error(await res.text())
-      const data = await res.json()
-      store.setJiraKeys(data.issue_keys ?? [])
+      const data: JiraResult & { issue_keys?: string[] } = await res.json()
+      store.setJiraResult({
+        created: data.created ?? [],
+        updated: data.updated ?? [],
+        deleted: data.deleted ?? [],
+        count: data.count ?? 0,
+      })
       store.setStatus('JIRA_PUSH_SUCCESS')
     } catch (err: unknown) {
       setJiraError(err instanceof Error ? err.message : String(err))
@@ -430,20 +435,117 @@ export default function WorkflowPage() {
 
         {/* Step: Jira complete */}
         {currentStep === 'jira' && store.status === 'JIRA_PUSH_SUCCESS' && (
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 space-y-4">
-            <div className="text-center py-8">
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 space-y-6">
+            <div className="text-center pt-4 pb-2">
               <div className="text-5xl mb-3">🎉</div>
-              <h2 className="text-xl font-bold text-gray-900">Tickets Created!</h2>
-              <p className="text-sm text-gray-500 mt-2">
-                {store.jiraKeys.length} Jira tickets pushed successfully
+              <h2 className="text-xl font-bold text-gray-900">Jira Sync Complete</h2>
+              <p className="text-sm text-gray-500 mt-1">
+                {store.jiraResult
+                  ? `${store.jiraResult.created.length} created · ${store.jiraResult.updated.length} updated · ${store.jiraResult.deleted.length} deleted`
+                  : `${store.jiraKeys.length} tickets pushed`}
               </p>
-              <div className="flex flex-wrap gap-2 justify-center mt-4">
+            </div>
+
+            {/* New tickets */}
+            {store.jiraResult && store.jiraResult.created.length > 0 && (
+              <div>
+                <p className="text-xs font-bold uppercase tracking-widest text-emerald-600 mb-2 flex items-center gap-1.5">
+                  <span className="inline-block w-2 h-2 rounded-full bg-emerald-500" />
+                  New Tickets ({store.jiraResult.created.length})
+                </p>
+                <ul className="space-y-2">
+                  {store.jiraResult.created.map((t) => (
+                    <li key={t.key} className="flex items-center justify-between gap-3 rounded-lg bg-emerald-50 border border-emerald-100 px-3 py-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="font-mono text-xs font-semibold text-emerald-700 flex-shrink-0">{t.key}</span>
+                        <span className="text-xs text-gray-700 truncate">{t.title}</span>
+                      </div>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${
+                          t.priority === 'high' ? 'bg-rose-100 text-rose-700' :
+                          t.priority === 'low'  ? 'bg-emerald-100 text-emerald-700' :
+                          'bg-amber-100 text-amber-700'
+                        }`}>{t.priority}</span>
+                        <a href={t.url} target="_blank" rel="noopener noreferrer"
+                          className="text-xs text-emerald-600 hover:text-emerald-800 underline">
+                          Open ↗
+                        </a>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* Updated tickets */}
+            {store.jiraResult && store.jiraResult.updated.length > 0 && (
+              <div>
+                <p className="text-xs font-bold uppercase tracking-widest text-blue-600 mb-2 flex items-center gap-1.5">
+                  <span className="inline-block w-2 h-2 rounded-full bg-blue-500" />
+                  Updated Tickets ({store.jiraResult.updated.length})
+                </p>
+                <ul className="space-y-2">
+                  {store.jiraResult.updated.map((t) => (
+                    <li key={t.key} className="flex items-center justify-between gap-3 rounded-lg bg-blue-50 border border-blue-100 px-3 py-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="font-mono text-xs font-semibold text-blue-700 flex-shrink-0">{t.key}</span>
+                        <span className="text-xs text-gray-700 truncate">{t.title}</span>
+                      </div>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${
+                          t.priority === 'high' ? 'bg-rose-100 text-rose-700' :
+                          t.priority === 'low'  ? 'bg-emerald-100 text-emerald-700' :
+                          'bg-amber-100 text-amber-700'
+                        }`}>{t.priority}</span>
+                        <a href={t.url} target="_blank" rel="noopener noreferrer"
+                          className="text-xs text-blue-600 hover:text-blue-800 underline">
+                          Open ↗
+                        </a>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* Deleted tickets */}
+            {store.jiraResult && store.jiraResult.deleted.length > 0 && (
+              <div>
+                <p className="text-xs font-bold uppercase tracking-widest text-gray-500 mb-2 flex items-center gap-1.5">
+                  <span className="inline-block w-2 h-2 rounded-full bg-gray-400" />
+                  Removed Tickets ({store.jiraResult.deleted.length})
+                </p>
+                <ul className="space-y-2">
+                  {store.jiraResult.deleted.map((t) => (
+                    <li key={t.key} className="flex items-center gap-2 rounded-lg bg-gray-50 border border-gray-200 px-3 py-2">
+                      <span className="font-mono text-xs font-semibold text-gray-500 line-through">{t.key}</span>
+                      <span className="text-xs text-gray-500 truncate">{t.title}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* Fallback: legacy plain key list when jiraResult is not set */}
+            {!store.jiraResult && store.jiraKeys.length > 0 && (
+              <div className="flex flex-wrap gap-2 justify-center">
                 {store.jiraKeys.map((key) => (
                   <span key={key} className="bg-blue-100 text-blue-800 text-xs font-mono px-2 py-1 rounded">
                     {key}
                   </span>
                 ))}
               </div>
+            )}
+
+            {/* Regenerate stories button */}
+            <div className="border-t border-gray-100 pt-4">
+              <button
+                onClick={handleGenerateStories}
+                disabled={generatingStories}
+                className="w-full border border-gray-300 text-gray-600 rounded-lg py-2 text-sm font-medium hover:bg-gray-50 disabled:opacity-40 transition-colors"
+              >
+                {generatingStories ? 'Regenerating…' : 'Regenerate Stories & Sync Again →'}
+              </button>
             </div>
           </div>
         )}

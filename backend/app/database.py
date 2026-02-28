@@ -96,6 +96,9 @@ def run_migrations() -> None:
         # future migration authors know the table was added in this phase.
         # Open Questions answering: user-provided Q&A answers stored on Project
         "ALTER TABLE project ADD COLUMN qa_answers TEXT DEFAULT '{}'",
+        # T-shirt sizing and transcript references on UserStory
+        "ALTER TABLE userstory ADD COLUMN size TEXT DEFAULT 'M'",
+        "ALTER TABLE userstory ADD COLUMN transcript_references TEXT DEFAULT '[]'",
     ]
 
     with engine.connect() as conn:

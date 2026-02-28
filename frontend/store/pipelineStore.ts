@@ -36,6 +36,12 @@ export interface PRDSections {
   open_questions?: { type1_conflicts: ConflictEntry[]; type2_gaps: (GapEntry | string)[] }
 }
 
+export interface TranscriptRef {
+  speaker: string
+  excerpt: string
+  source: 'transcript' | 'kb'
+}
+
 export interface UserStory {
   id: string
   title: string
@@ -43,10 +49,31 @@ export interface UserStory {
   acceptance_criteria: string[]
   validations: { field: string; rule: string; error_message: string }[]
   priority?: 'high' | 'medium' | 'low'
+  size?: 'XS' | 'S' | 'M' | 'L' | 'XL'
   dependencies?: string[]
   reference_links?: string[]
+  transcript_references?: TranscriptRef[]
   story_status?: 'open' | 'done' | 'obsolete'
   diff?: 'new' | 'modified' | 'kept'
+}
+
+export interface JiraTicketResult {
+  key: string
+  url: string
+  title: string
+  priority: 'high' | 'medium' | 'low'
+}
+
+export interface JiraDeletedResult {
+  key: string
+  title: string
+}
+
+export interface JiraResult {
+  created: JiraTicketResult[]
+  updated: JiraTicketResult[]
+  deleted: JiraDeletedResult[]
+  count: number
 }
 
 interface PipelineState {
@@ -59,6 +86,7 @@ interface PipelineState {
   prdSections: PRDSections
   stories: UserStory[]
   jiraKeys: string[]
+  jiraResult: JiraResult | null
   hallucinations: number
   gapAnswers: Record<string, string>
 
@@ -70,6 +98,7 @@ interface PipelineState {
   addStory: (story: UserStory) => void
   removeStoryById: (id: string) => void
   setJiraKeys: (keys: string[]) => void
+  setJiraResult: (result: JiraResult) => void
   setHallucinations: (count: number) => void
   setGapAnswer: (key: string, answer: string) => void
   setGapAnswers: (answers: Record<string, string>) => void
@@ -90,6 +119,7 @@ const initialState = {
   prdSections: {},
   stories: [],
   jiraKeys: [],
+  jiraResult: null,
   hallucinations: 0,
   gapAnswers: {},
 }
@@ -124,6 +154,10 @@ export const usePipelineStore = create<PipelineState>()(
         set((state) => ({ stories: state.stories.filter((s) => s.id !== id) })),
 
       setJiraKeys: (keys) => set({ jiraKeys: keys }),
+      setJiraResult: (result) => set({
+        jiraResult: result,
+        jiraKeys: [...result.created, ...result.updated].map((t) => t.key),
+      }),
       setHallucinations: (count) => set({ hallucinations: count }),
 
       setGapAnswer: (key, answer) =>

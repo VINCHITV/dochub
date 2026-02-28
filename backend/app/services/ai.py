@@ -173,6 +173,21 @@ class ValidationRow(BaseModel):
     error_message: str
 
 
+class TranscriptRef(BaseModel):
+    """
+    A speaker-attributed reference to a verbatim transcript or KB excerpt.
+
+    speaker: the speaker's name as it appears in the transcript (e.g. "Alice", "PM").
+             Use empty string if transcript has no named speakers.
+    excerpt: 1-2 verbatim sentences from the transcript that support this story.
+    source:  "transcript" for direct transcript quotes, "kb" for KB-sourced context.
+    """
+
+    speaker: str = ""
+    excerpt: str
+    source: Literal["transcript", "kb"] = "transcript"
+
+
 class UserStoryModel(BaseModel):
     """
     A single vertically-sliced user story with full acceptance criteria.
@@ -181,8 +196,10 @@ class UserStoryModel(BaseModel):
     acceptance_criteria should cover happy path, alternative paths, and error paths.
     validations is the field-level validation table (e.g. email format, required fields).
     priority reflects business value: 'high' for must-have, 'medium' for should-have, 'low' for nice-to-have.
+    size is the T-shirt effort estimate: XS (<1 day), S (1-2 days), M (3-5 days), L (6-10 days), XL (>2 weeks).
     dependencies lists story titles that must be completed before this one.
     reference_links lists relevant documentation URLs or knowledge base references.
+    transcript_references lists 1-3 verbatim speaker quotes from the transcript that justify this story.
     """
 
     title: str
@@ -190,8 +207,10 @@ class UserStoryModel(BaseModel):
     acceptance_criteria: list[str]
     validations: list[ValidationRow]
     priority: Literal["high", "medium", "low"] = "medium"
+    size: Literal["XS", "S", "M", "L", "XL"] = "M"
     dependencies: list[str] = []
     reference_links: list[str] = []
+    transcript_references: list[TranscriptRef] = []
 
 
 # ---------------------------------------------------------------------------
