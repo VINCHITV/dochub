@@ -1,0 +1,357 @@
+'use client'
+
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { usePipelineStore, UserStory, WorkflowStatus } from '@/store/pipelineStore'
+import { WizardStepper } from '@/components/WizardStepper'
+import { PRDViewer } from '@/components/PRDViewer'
+import { StoriesViewer } from '@/components/StoriesViewer'
+import { useFileUpload } from '@/hooks/useFileUpload'
+import { useSSEStream } from '@/hooks/useSSEStream'
+
+const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
+
+function statusToStep(status: WorkflowStatus | null): string {
+  switch (status) {
+    case null:
+    case 'TRANSCRIPT_UPLOADED':
+      return 'upload'
+    case 'PRD_GENERATED':
+      return 'review'
+    case 'PRD_APPROVED':
+      return 'stories'
+    case 'STORIES_GENERATED':
+    case 'JIRA_PUSH_PENDING':
+      return 'jira'
+    case 'JIRA_PUSH_SUCCESS':
+    case 'COMPLETED':
+      return 'jira'
+    default:
+      return 'upload'
+  }
+}
+
+export default function WorkflowPage() {
+  const router = useRouter()
+  const store = usePipelineStore()
+  const { upload, uploading, error: uploadError } = useFileUpload()
+
+  const [file, setFile] = useState<File | null>(null)
+  const [generatingPRD, setGeneratingPRD] = useState(false)
+  const [generatingStories, setGeneratingStories] = useState(false)
+  const [storyStepLabel, setStoryStepLabel] = useState('')
+  const [pushingJira, setPushingJira] = useState(false)
+  const [jiraError, setJiraError] = useState<string | null>(null)
+  const [sseError, setSSEError] = useState<string | null>(null)
+  const didRehydrate = useRef(false)
+
+  const currentStep = statusToStep(store.status)
+
+  // Rehydrate from server on mount if we have a saved projectId
+  useEffect(() => {
+    if (didRehydrate.current) return
+    if (!store.projectId) {
+      router.replace('/')
+      return
+    }
+    didRehydrate.current = true
+    fetch(`${API}/projects/${store.projectId}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data) store.rehydrateFromServer(data)
+      })
+      .catch(() => {})
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // PRD SSE handler
+  const handlePRDEvent = useCallback(
+    (event: Record<string, unknown>) => {
+      if (event.section && event.markdown) {
+        store.upsertPRDSection(event.section as string, event.data ?? event)
+      }
+      if (event.hallucination_count !== undefined) {
+        store.setHallucinations(event.hallucination_count as number)
+      }
+      if (event.done) {
+        setGeneratingPRD(false)
+        store.setStatus('PRD_GENERATED')
+      }
+    },
+    [store]
+  )
+
+  // Story SSE handler
+  const handleStoryEvent = useCallback(
+    (event: Record<string, unknown>) => {
+      if (event.step === 'extracting_capabilities') setStoryStepLabel('Extracting capabilities…')
+      if (event.step === 'slices_planned') setStoryStepLabel(`Planning ${event.count} feature slices…`)
+      if (event.step === 'story_done' && event.story) {
+        store.addStory(event.story as UserStory)
+        setStoryStepLabel('Generating stories…')
+      }
+      if (event.done) {
+        setGeneratingStories(false)
+        setStoryStepLabel('')
+        store.setStatus('STORIES_GENERATED')
+      }
+    },
+    [store]
+  )
+
+  const { stream: streamPRD } = useSSEStream({
+    onEvent: handlePRDEvent,
+    onError: (e) => { setSSEError(e.message); setGeneratingPRD(false) },
+    onDone: () => setGeneratingPRD(false),
+  })
+
+  const { stream: streamStories } = useSSEStream({
+    onEvent: handleStoryEvent,
+    onError: (e) => { setSSEError(e.message); setGeneratingStories(false) },
+    onDone: () => setGeneratingStories(false),
+  })
+
+  // Upload transcript
+  const handleUpload = async () => {
+    if (!file || !store.projectName) return
+    const result = await upload(file, store.projectName)
+    if (result) {
+      store.setProjectId(result.project_id)
+      store.setStatus('TRANSCRIPT_UPLOADED')
+    }
+  }
+
+  // Generate PRD
+  const handleGeneratePRD = async () => {
+    if (!store.projectId) return
+    setGeneratingPRD(true)
+    setSSEError(null)
+    await streamPRD(`${API}/generate/prd`, { project_id: store.projectId })
+  }
+
+  // Approve PRD
+  const handleApprovePRD = async () => {
+    if (!store.projectId) return
+    const res = await fetch(`${API}/projects/${store.projectId}/approve`, { method: 'POST' })
+    if (res.ok) store.setStatus('PRD_APPROVED')
+  }
+
+  // Generate Stories
+  const handleGenerateStories = async () => {
+    if (!store.projectId) return
+    setGeneratingStories(true)
+    setSSEError(null)
+    await streamStories(`${API}/generate/stories`, { project_id: store.projectId })
+  }
+
+  // Push to Jira
+  const handlePushJira = async () => {
+    if (!store.projectId) return
+    setPushingJira(true)
+    setJiraError(null)
+    try {
+      const res = await fetch(`${API}/jira/tickets`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project_id: store.projectId }),
+      })
+      if (!res.ok) throw new Error(await res.text())
+      const data = await res.json()
+      store.setJiraKeys(data.issue_keys ?? [])
+      store.setStatus('JIRA_PUSH_SUCCESS')
+    } catch (err: unknown) {
+      setJiraError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setPushingJira(false)
+    }
+  }
+
+  // Export DOCX
+  const handleExport = () => {
+    if (!store.projectId) return
+    window.open(`${API}/export/${store.projectId}/docx`, '_blank')
+  }
+
+  return (
+    <main className="min-h-screen bg-gray-50">
+      <div className="max-w-4xl mx-auto px-4 py-8">
+        <div className="mb-6 flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">{store.projectName || 'DocHub'}</h1>
+            <p className="text-sm text-gray-500">Pipeline progress</p>
+          </div>
+          <button
+            onClick={() => { store.reset(); router.replace('/') }}
+            className="text-xs text-gray-400 hover:text-gray-600"
+          >
+            ← Start over
+          </button>
+        </div>
+
+        <WizardStepper currentStep={currentStep} />
+
+        {/* Error banner */}
+        {(sseError || uploadError || jiraError) && (
+          <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-4 text-sm text-red-700">
+            {sseError || uploadError || jiraError}
+          </div>
+        )}
+
+        {/* Step: Upload */}
+        {(currentStep === 'upload') && (
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 space-y-4">
+            <h2 className="font-semibold text-gray-800">Upload Meeting Transcript</h2>
+            <p className="text-sm text-gray-500">Accepts .txt or .docx files</p>
+
+            <div
+              className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center cursor-pointer hover:border-blue-400 transition-colors"
+              onClick={() => document.getElementById('file-input')?.click()}
+            >
+              <div className="text-3xl mb-2">📁</div>
+              <p className="text-sm text-gray-600">
+                {file ? file.name : 'Click to select a transcript file'}
+              </p>
+              <input
+                id="file-input"
+                type="file"
+                accept=".txt,.docx"
+                className="hidden"
+                onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              />
+            </div>
+
+            <button
+              onClick={handleUpload}
+              disabled={!file || uploading}
+              className="w-full bg-blue-600 text-white rounded-lg py-2.5 text-sm font-semibold hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              {uploading ? 'Uploading…' : 'Upload & Continue'}
+            </button>
+
+            {/* Or if already uploaded, offer generate */}
+            {store.status === 'TRANSCRIPT_UPLOADED' && (
+              <button
+                onClick={handleGeneratePRD}
+                disabled={generatingPRD}
+                className="w-full bg-indigo-600 text-white rounded-lg py-2.5 text-sm font-semibold hover:bg-indigo-700 disabled:opacity-40 transition-colors"
+              >
+                {generatingPRD ? 'Generating PRD…' : 'Generate PRD →'}
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Step: PRD review */}
+        {(currentStep === 'review' || currentStep === 'prd') && (
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="font-semibold text-gray-800">Product Requirements Document</h2>
+              <div className="flex gap-2">
+                <button
+                  onClick={handleExport}
+                  className="text-xs border border-gray-300 rounded px-3 py-1.5 hover:bg-gray-50"
+                >
+                  Export DOCX
+                </button>
+                {!generatingPRD && store.status === 'PRD_GENERATED' && (
+                  <button
+                    onClick={handleGeneratePRD}
+                    className="text-xs border border-gray-300 rounded px-3 py-1.5 hover:bg-gray-50"
+                  >
+                    Regenerate
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <PRDViewer
+              sections={store.prdSections}
+              generating={generatingPRD}
+              hallucinations={store.hallucinations}
+            />
+
+            {!generatingPRD && store.status === 'PRD_GENERATED' && (
+              <button
+                onClick={handleApprovePRD}
+                className="w-full bg-green-600 text-white rounded-lg py-2.5 text-sm font-semibold hover:bg-green-700 transition-colors"
+              >
+                Approve PRD & Generate Stories →
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Step: Stories */}
+        {(currentStep === 'stories') && (
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 space-y-4">
+            <h2 className="font-semibold text-gray-800">User Stories</h2>
+
+            {store.status === 'PRD_APPROVED' && store.stories.length === 0 && !generatingStories && (
+              <button
+                onClick={handleGenerateStories}
+                className="w-full bg-indigo-600 text-white rounded-lg py-2.5 text-sm font-semibold hover:bg-indigo-700 transition-colors"
+              >
+                Generate User Stories →
+              </button>
+            )}
+
+            <StoriesViewer
+              stories={store.stories}
+              generating={generatingStories}
+              stepLabel={storyStepLabel}
+            />
+
+            {store.status === 'STORIES_GENERATED' && (
+              <button
+                onClick={handlePushJira}
+                disabled={pushingJira}
+                className="w-full bg-blue-600 text-white rounded-lg py-2.5 text-sm font-semibold hover:bg-blue-700 disabled:opacity-40 transition-colors"
+              >
+                {pushingJira ? 'Pushing to Jira…' : 'Push to Jira →'}
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Step: Jira complete */}
+        {currentStep === 'jira' && store.status === 'JIRA_PUSH_SUCCESS' && (
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 space-y-4">
+            <div className="text-center py-8">
+              <div className="text-5xl mb-3">🎉</div>
+              <h2 className="text-xl font-bold text-gray-900">Tickets Created!</h2>
+              <p className="text-sm text-gray-500 mt-2">
+                {store.jiraKeys.length} Jira tickets pushed successfully
+              </p>
+              <div className="flex flex-wrap gap-2 justify-center mt-4">
+                {store.jiraKeys.map((key) => (
+                  <span key={key} className="bg-blue-100 text-blue-800 text-xs font-mono px-2 py-1 rounded">
+                    {key}
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Jira push error: stories still showing */}
+        {currentStep === 'jira' && store.status !== 'JIRA_PUSH_SUCCESS' && store.stories.length > 0 && (
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 space-y-4">
+            <h2 className="font-semibold text-gray-800">User Stories</h2>
+            <StoriesViewer stories={store.stories} generating={false} />
+            {jiraError && (
+              <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded p-3">
+                Jira error: {jiraError}
+              </div>
+            )}
+            <button
+              onClick={handlePushJira}
+              disabled={pushingJira}
+              className="w-full bg-blue-600 text-white rounded-lg py-2.5 text-sm font-semibold hover:bg-blue-700 disabled:opacity-40 transition-colors"
+            >
+              {pushingJira ? 'Retrying Jira push…' : 'Retry Jira Push →'}
+            </button>
+          </div>
+        )}
+      </div>
+    </main>
+  )
+}
