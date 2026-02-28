@@ -94,6 +94,8 @@ def run_migrations() -> None:
         # automatically by create_db_and_tables() via SQLModel.metadata.create_all().
         # No ALTER TABLE is needed here. This comment documents the A1 boundary so
         # future migration authors know the table was added in this phase.
+        # Open Questions answering: user-provided Q&A answers stored on Project
+        "ALTER TABLE project ADD COLUMN qa_answers TEXT DEFAULT '{}'",
     ]
 
     with engine.connect() as conn:

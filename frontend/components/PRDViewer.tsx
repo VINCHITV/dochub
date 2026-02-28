@@ -3,6 +3,8 @@
 import ReactMarkdown from 'react-markdown'
 import { PRDSections, ConflictEntry, GapEntry } from '@/store/pipelineStore'
 
+// open_questions is excluded here — it is shown as an interactive panel
+// (OpenQuestionsPanel) in the workflow page so users can answer gaps/conflicts.
 const SECTION_ORDER = [
   'title',
   'description',
@@ -10,7 +12,6 @@ const SECTION_ORDER = [
   'why',
   'success',
   'audience',
-  'open_questions',
 ] as const
 
 const SECTION_LABELS: Record<string, string> = {
@@ -20,7 +21,6 @@ const SECTION_LABELS: Record<string, string> = {
   why: 'Why Now',
   success: 'Success Metrics',
   audience: 'Target Audience',
-  open_questions: 'Open Questions & Risks',
 }
 
 function sectionToMarkdown(key: string, data: unknown): string {

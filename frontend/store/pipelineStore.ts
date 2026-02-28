@@ -60,6 +60,7 @@ interface PipelineState {
   stories: UserStory[]
   jiraKeys: string[]
   hallucinations: number
+  gapAnswers: Record<string, string>
 
   // Actions
   setProjectId: (id: string) => void
@@ -70,11 +71,14 @@ interface PipelineState {
   removeStoryById: (id: string) => void
   setJiraKeys: (keys: string[]) => void
   setHallucinations: (count: number) => void
+  setGapAnswer: (key: string, answer: string) => void
+  setGapAnswers: (answers: Record<string, string>) => void
   rehydrateFromServer: (project: {
     id: string
     name: string
     status: WorkflowStatus
     prd_json?: string
+    qa_answers?: Record<string, string>
   }) => void
   reset: () => void
 }
@@ -87,6 +91,7 @@ const initialState = {
   stories: [],
   jiraKeys: [],
   hallucinations: 0,
+  gapAnswers: {},
 }
 
 export const usePipelineStore = create<PipelineState>()(
@@ -121,6 +126,11 @@ export const usePipelineStore = create<PipelineState>()(
       setJiraKeys: (keys) => set({ jiraKeys: keys }),
       setHallucinations: (count) => set({ hallucinations: count }),
 
+      setGapAnswer: (key, answer) =>
+        set((state) => ({ gapAnswers: { ...state.gapAnswers, [key]: answer } })),
+
+      setGapAnswers: (answers) => set({ gapAnswers: answers }),
+
       rehydrateFromServer: (project) => {
         const prdSections = project.prd_json
           ? (() => {
@@ -132,6 +142,7 @@ export const usePipelineStore = create<PipelineState>()(
           projectName: project.name,
           status: project.status,
           prdSections,
+          gapAnswers: project.qa_answers ?? {},
         })
       },
 

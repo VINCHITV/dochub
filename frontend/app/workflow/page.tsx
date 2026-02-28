@@ -2,10 +2,11 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { usePipelineStore, UserStory, WorkflowStatus } from '@/store/pipelineStore'
+import { usePipelineStore, UserStory, WorkflowStatus, ConflictEntry } from '@/store/pipelineStore'
 import { WizardStepper } from '@/components/WizardStepper'
 import { PRDViewer } from '@/components/PRDViewer'
 import { StoriesViewer } from '@/components/StoriesViewer'
+import { OpenQuestionsPanel } from '@/components/OpenQuestionsPanel'
 import { useFileUpload } from '@/hooks/useFileUpload'
 import { useSSEStream } from '@/hooks/useSSEStream'
 
@@ -34,15 +35,18 @@ function statusToStep(status: WorkflowStatus | null): string {
 export default function WorkflowPage() {
   const router = useRouter()
   const store = usePipelineStore()
-  const { upload, uploading, error: uploadError } = useFileUpload()
+  const { upload, uploading, uploadAdditional, addingTranscripts, error: uploadError } = useFileUpload()
 
   const [file, setFile] = useState<File | null>(null)
+  const [additionalFiles, setAdditionalFiles] = useState<File[]>([])
   const [generatingPRD, setGeneratingPRD] = useState(false)
   const [generatingStories, setGeneratingStories] = useState(false)
   const [storyStepLabel, setStoryStepLabel] = useState('')
   const [pushingJira, setPushingJira] = useState(false)
   const [jiraError, setJiraError] = useState<string | null>(null)
   const [sseError, setSSEError] = useState<string | null>(null)
+  const [savingAnswers, setSavingAnswers] = useState(false)
+  const [answersSaved, setAnswersSaved] = useState(false)
   const didRehydrate = useRef(false)
 
   const currentStep = statusToStep(store.status)
@@ -126,6 +130,15 @@ export default function WorkflowPage() {
     }
   }
 
+  // Add more transcripts (after initial upload)
+  const handleAddTranscripts = async () => {
+    if (!additionalFiles.length || !store.projectId) return
+    const result = await uploadAdditional(additionalFiles, store.projectId)
+    if (result) {
+      setAdditionalFiles([])
+    }
+  }
+
   // Generate PRD
   const handleGeneratePRD = async () => {
     if (!store.projectId) return
@@ -171,11 +184,32 @@ export default function WorkflowPage() {
     }
   }
 
+  // Save open question answers
+  const handleSaveAnswers = async () => {
+    if (!store.projectId) return
+    setSavingAnswers(true)
+    setAnswersSaved(false)
+    try {
+      const res = await fetch(`${API}/projects/${store.projectId}/qa-answers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(store.gapAnswers),
+      })
+      if (res.ok) setAnswersSaved(true)
+    } finally {
+      setSavingAnswers(false)
+    }
+  }
+
   // Export DOCX
   const handleExport = () => {
     if (!store.projectId) return
     window.open(`${API}/export/${store.projectId}/docx`, '_blank')
   }
+
+  const openQuestions = store.prdSections.open_questions
+  const conflicts = openQuestions?.type1_conflicts ?? []
+  const gaps = openQuestions?.type2_gaps ?? []
 
   return (
     <main className="min-h-screen bg-gray-50">
@@ -233,48 +267,114 @@ export default function WorkflowPage() {
               {uploading ? 'Uploading…' : 'Upload & Continue'}
             </button>
 
-            {/* Or if already uploaded, offer generate */}
+            {/* After initial upload: add more transcripts */}
             {store.status === 'TRANSCRIPT_UPLOADED' && (
-              <button
-                onClick={handleGeneratePRD}
-                disabled={generatingPRD}
-                className="w-full bg-indigo-600 text-white rounded-lg py-2.5 text-sm font-semibold hover:bg-indigo-700 disabled:opacity-40 transition-colors"
-              >
-                {generatingPRD ? 'Generating PRD…' : 'Generate PRD →'}
-              </button>
+              <div className="space-y-3 border-t border-gray-100 pt-4">
+                <p className="text-sm font-medium text-gray-700">
+                  Add more transcripts (optional)
+                </p>
+                <p className="text-xs text-gray-500">
+                  Upload additional meeting files — they will be merged with the first transcript before PRD generation.
+                </p>
+
+                <div
+                  className="border-2 border-dashed border-gray-200 rounded-lg p-4 text-center cursor-pointer hover:border-indigo-300 transition-colors"
+                  onClick={() => document.getElementById('additional-file-input')?.click()}
+                >
+                  <p className="text-sm text-gray-500">
+                    {additionalFiles.length > 0
+                      ? additionalFiles.map((f) => f.name).join(', ')
+                      : 'Click to select additional transcripts'}
+                  </p>
+                  <input
+                    id="additional-file-input"
+                    type="file"
+                    accept=".txt,.docx"
+                    multiple
+                    className="hidden"
+                    onChange={(e) => setAdditionalFiles(Array.from(e.target.files ?? []))}
+                  />
+                </div>
+
+                {additionalFiles.length > 0 && (
+                  <button
+                    onClick={handleAddTranscripts}
+                    disabled={addingTranscripts}
+                    className="w-full bg-indigo-50 border border-indigo-300 text-indigo-700 rounded-lg py-2 text-sm font-semibold hover:bg-indigo-100 disabled:opacity-40 transition-colors"
+                  >
+                    {addingTranscripts
+                      ? 'Adding…'
+                      : `Add ${additionalFiles.length} transcript${additionalFiles.length > 1 ? 's' : ''}`}
+                  </button>
+                )}
+
+                <button
+                  onClick={handleGeneratePRD}
+                  disabled={generatingPRD}
+                  className="w-full bg-indigo-600 text-white rounded-lg py-2.5 text-sm font-semibold hover:bg-indigo-700 disabled:opacity-40 transition-colors"
+                >
+                  {generatingPRD ? 'Generating PRD…' : 'Generate PRD →'}
+                </button>
+              </div>
             )}
           </div>
         )}
 
         {/* Step: PRD review */}
         {(currentStep === 'review' || currentStep === 'prd') && (
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="font-semibold text-gray-800">Product Requirements Document</h2>
-              <div className="flex gap-2">
-                <button
-                  onClick={handleExport}
-                  className="text-xs border border-gray-300 rounded px-3 py-1.5 hover:bg-gray-50"
-                >
-                  Export DOCX
-                </button>
-                {!generatingPRD && store.status === 'PRD_GENERATED' && (
+          <div className="space-y-4">
+            {/* PRD sections (title → audience) */}
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 space-y-4">
+              <div className="flex items-center justify-between">
+                <h2 className="font-semibold text-gray-800">Product Requirements Document</h2>
+                <div className="flex gap-2">
                   <button
-                    onClick={handleGeneratePRD}
+                    onClick={handleExport}
                     className="text-xs border border-gray-300 rounded px-3 py-1.5 hover:bg-gray-50"
                   >
-                    Regenerate
+                    Export DOCX
                   </button>
-                )}
+                  {!generatingPRD && store.status === 'PRD_GENERATED' && (
+                    <button
+                      onClick={handleGeneratePRD}
+                      className="text-xs border border-gray-300 rounded px-3 py-1.5 hover:bg-gray-50"
+                    >
+                      Regenerate
+                    </button>
+                  )}
+                </div>
               </div>
+
+              <PRDViewer
+                sections={store.prdSections}
+                generating={generatingPRD}
+                hallucinations={store.hallucinations}
+              />
             </div>
 
-            <PRDViewer
-              sections={store.prdSections}
-              generating={generatingPRD}
-              hallucinations={store.hallucinations}
-            />
+            {/* Open Questions & Risks — interactive answering panel */}
+            {(conflicts.length > 0 || gaps.length > 0 || !generatingPRD) && (
+              <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 space-y-4">
+                <div>
+                  <h2 className="font-semibold text-gray-800">Open Questions & Risks</h2>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    Review each conflict and gap below — type your answers so they can inform the next PRD revision.
+                  </p>
+                </div>
 
+                <OpenQuestionsPanel
+                  conflicts={conflicts as ConflictEntry[]}
+                  gaps={gaps}
+                  answers={store.gapAnswers}
+                  onAnswerChange={store.setGapAnswer}
+                  onSave={handleSaveAnswers}
+                  saving={savingAnswers}
+                  saved={answersSaved}
+                />
+              </div>
+            )}
+
+            {/* Approve button */}
             {!generatingPRD && store.status === 'PRD_GENERATED' && (
               <button
                 onClick={handleApprovePRD}

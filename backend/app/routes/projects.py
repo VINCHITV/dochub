@@ -15,7 +15,7 @@ import time
 from typing import Annotated, Optional
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
+from fastapi import APIRouter, Body, Depends, HTTPException, UploadFile, status
 from sqlmodel import Session, select
 
 from app.database import get_session
@@ -142,12 +142,20 @@ async def get_project(
         except json.JSONDecodeError:
             prd_parsed = None
 
+    qa_answers: dict = {}
+    if project.qa_answers:
+        try:
+            qa_answers = json.loads(project.qa_answers)
+        except json.JSONDecodeError:
+            qa_answers = {}
+
     return {
         "id": project.id,
         "name": project.name,
         "status": project.status.value,
         "transcript_text": project.transcript_text,
         "prd_json": prd_parsed,
+        "qa_answers": qa_answers,
         "prompt_version": project.prompt_version,
         "generator_model": project.generator_model,
         "embedding_model": project.embedding_model,
@@ -169,6 +177,55 @@ async def approve_prd(
     )
     logger.info("projects.prd_approved", project_id=project_id)
     return {"status": updated_project.status.value, "project_id": project_id}
+
+
+@router.post("/{project_id}/qa-answers", status_code=status.HTTP_200_OK)
+async def save_qa_answers(
+    project_id: str,
+    db: Annotated[Session, Depends(get_session)],
+    answers: Annotated[dict, Body(embed=False)],
+) -> dict:
+    """
+    Persist user-provided answers to open questions / gaps / conflicts.
+
+    Merges the incoming `answers` dict into any previously saved answers
+    (new keys are added, existing keys are overwritten). Answers are stored
+    as a JSON blob on Project.qa_answers for future PRD refinement (B3 loop).
+
+    The endpoint is intentionally permissive about project status — answers
+    can be saved at any point after a PRD has been generated.
+
+    Request body: flat JSON object mapping question text → answer string.
+    Response: { "project_id": str, "saved": int }
+    """
+    statement = select(Project).where(Project.id == project_id)
+    project: Optional[Project] = db.exec(statement).first()
+
+    if project is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Project '{project_id}' not found.",
+        )
+
+    # Merge with existing answers
+    existing: dict = {}
+    if project.qa_answers:
+        try:
+            existing = json.loads(project.qa_answers)
+        except json.JSONDecodeError:
+            existing = {}
+
+    merged = {**existing, **answers}
+    project.qa_answers = json.dumps(merged)
+    db.add(project)
+    db.commit()
+
+    logger.info(
+        "projects.qa_answers_saved",
+        project_id=project_id,
+        answer_count=len(merged),
+    )
+    return {"project_id": project_id, "saved": len(merged)}
 
 
 # ---------------------------------------------------------------------------

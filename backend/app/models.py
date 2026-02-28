@@ -97,6 +97,16 @@ class Project(SQLModel, table=True):
         description="UTC timestamp of project creation (set once on insert).",
     )
 
+    # -- User-provided answers to open questions (stored as JSON dict) --
+    qa_answers: str = Field(
+        default="{}",
+        description=(
+            "JSON-serialized dict mapping question text to PM answer. "
+            "Populated via POST /projects/{id}/qa-answers. "
+            "Used as context when regenerating the PRD (B3 loop)."
+        ),
+    )
+
     # -- Version tags (frozen at PRD generation time) --
     prompt_version: str = Field(
         default=PRD_PROMPT_VERSION,
