@@ -24,14 +24,14 @@ parsing the request, calling services, returning the response.
 
 from __future__ import annotations
 
-from typing import Annotated, Optional
+from typing import Annotated, List, Optional
 
 import structlog
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile, status
 from sqlmodel import Session, select
 
 from app.database import get_session
-from app.models import Project
+from app.models import Project, Transcript
 from app.services.docx_parser import extract_embedded_metadata
 from app.services.file_parser import parse_file
 from app.services.workflow import WorkflowStatus
@@ -128,3 +128,154 @@ async def upload_transcript(
         "is_reupload": False,
     }
 
+
+# ---------------------------------------------------------------------------
+# POST /upload/transcripts/{project_id}
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/transcripts/{project_id}",
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_transcripts(
+    project_id: str,
+    files: List[UploadFile],
+    db: Annotated[Session, Depends(get_session)],
+) -> dict:
+    """
+    Append one or more transcript files to an existing project.
+
+    Each file is parsed with ``parse_file`` (same logic as POST /upload).
+    A ``Transcript`` row is created for each file with a stable ``doc_id``
+    of the form ``<project_id>-t<n>`` where n is the global sort_order across
+    all transcripts for this project (0-based, increments across calls).
+
+    After inserting, all Transcript rows for the project are re-read in
+    sort_order order and concatenated with ``--- [Source: <filename>] ---`` markers.
+    The merged string is written to ``Project.transcript_text`` so downstream
+    PRD generation always reads a single coherent string.
+
+    Constraints
+    -----------
+    - Project must exist: HTTP 404 if not found.
+    - Project status must be ``TRANSCRIPT_UPLOADED``: HTTP 409 if not.
+      Once PRD generation has started the transcript corpus is frozen.
+    - At least one file must be provided: HTTP 422 if ``files`` is empty.
+
+    Returns
+    -------
+    {
+        "project_id": str,
+        "transcript_ids": list[str],   # IDs of the newly created Transcript rows
+        "merged_length": int,           # len(Project.transcript_text) after merge
+        "transcript_count": int,        # total Transcript rows for this project
+    }
+    """
+    # --- Load project ---
+    project: Optional[Project] = db.exec(
+        select(Project).where(Project.id == project_id)
+    ).first()
+    if project is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Project '{project_id}' not found.",
+        )
+
+    # --- Guard: transcripts may only be added before PRD generation starts ---
+    if project.status != WorkflowStatus.TRANSCRIPT_UPLOADED:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Cannot add transcripts to project '{project_id}' in status "
+                f"'{project.status.value}'. Transcripts are locked once PRD "
+                "generation has started."
+            ),
+        )
+
+    # --- Require at least one file ---
+    if not files:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="At least one file must be provided.",
+        )
+
+    # --- Determine starting sort_order from existing Transcript count ---
+    existing_transcripts: list[Transcript] = list(
+        db.exec(
+            select(Transcript)
+            .where(Transcript.project_id == project_id)
+            .order_by(Transcript.sort_order)  # type: ignore[arg-type]
+        ).all()
+    )
+    next_sort_order: int = len(existing_transcripts)
+
+    # --- Parse, validate, and create a Transcript row for each file ---
+    new_transcript_ids: list[str] = []
+    new_transcripts: list[Transcript] = []
+
+    for file in files:
+        filename: str = file.filename or ""
+        content: bytes = await file.read()
+
+        try:
+            raw_text = parse_file(filename, content)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(exc),
+            ) from exc
+
+        transcript = Transcript(
+            project_id=project_id,
+            filename=filename,
+            raw_text=raw_text,
+            doc_id=f"{project_id}-t{next_sort_order}",
+            sort_order=next_sort_order,
+        )
+        db.add(transcript)
+        new_transcripts.append(transcript)
+        next_sort_order += 1
+
+    # Flush to get IDs without committing — needed to collect new_transcript_ids
+    db.flush()
+    for t in new_transcripts:
+        db.refresh(t)
+        new_transcript_ids.append(t.id)
+
+    # --- Merge all transcripts (existing + new) in sort_order order ---
+    all_transcripts: list[Transcript] = list(
+        db.exec(
+            select(Transcript)
+            .where(Transcript.project_id == project_id)
+            .order_by(Transcript.sort_order)  # type: ignore[arg-type]
+        ).all()
+    )
+
+    # Each segment is prefixed with its source filename header.
+    # "\n\n".join() handles inter-segment whitespace; the header sits on its
+    # own line at the top of each segment so the LLM can distinguish sources.
+    labelled_segments: list[str] = [
+        f"--- [Source: {t.filename}] ---\n\n{t.raw_text}"
+        for t in all_transcripts
+    ]
+    merged_text = "\n\n".join(labelled_segments)
+
+    # --- Persist merged text to Project ---
+    project.transcript_text = merged_text
+    db.add(project)
+    db.commit()
+
+    logger.info(
+        "upload.transcripts_added",
+        project_id=project_id,
+        new_count=len(new_transcript_ids),
+        total_count=len(all_transcripts),
+        merged_len=len(merged_text),
+    )
+
+    return {
+        "project_id": project_id,
+        "transcript_ids": new_transcript_ids,
+        "merged_length": len(merged_text),
+        "transcript_count": len(all_transcripts),
+    }

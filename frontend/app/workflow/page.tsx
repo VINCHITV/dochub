@@ -68,8 +68,8 @@ export default function WorkflowPage() {
   // PRD SSE handler
   const handlePRDEvent = useCallback(
     (event: Record<string, unknown>) => {
-      if (event.section && event.markdown) {
-        store.upsertPRDSection(event.section as string, event.data ?? event)
+      if (event.section && event.data !== undefined) {
+        store.upsertPRDSection(event.section as string, event.data)
       }
       if (event.hallucination_count !== undefined) {
         store.setHallucinations(event.hallucination_count as number)
@@ -90,6 +90,10 @@ export default function WorkflowPage() {
       if (event.step === 'story_done' && event.story) {
         store.addStory(event.story as UserStory)
         setStoryStepLabel('Generating stories…')
+      }
+      if (event.step === 'story_diff' && event.classification === 'obsolete') {
+        // obsolete stories are soft-deleted server-side; remove from client list
+        store.removeStoryById(event.story_id as string)
       }
       if (event.done) {
         setGeneratingStories(false)
@@ -287,12 +291,12 @@ export default function WorkflowPage() {
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 space-y-4">
             <h2 className="font-semibold text-gray-800">User Stories</h2>
 
-            {store.status === 'PRD_APPROVED' && store.stories.length === 0 && !generatingStories && (
+            {(store.status === 'PRD_APPROVED' || store.status === 'STORIES_GENERATED') && !generatingStories && (
               <button
                 onClick={handleGenerateStories}
                 className="w-full bg-indigo-600 text-white rounded-lg py-2.5 text-sm font-semibold hover:bg-indigo-700 transition-colors"
               >
-                Generate User Stories →
+                {store.stories.length > 0 ? 'Regenerate Stories →' : 'Generate User Stories →'}
               </button>
             )}
 

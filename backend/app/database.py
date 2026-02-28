@@ -25,7 +25,7 @@ Post-hackathon Postgres migration:
 
 from typing import Generator
 
-from sqlalchemy import event
+from sqlalchemy import event, text as sqlalchemy_text
 from sqlmodel import Session, SQLModel, create_engine
 
 DATABASE_URL: str = "sqlite:///./dochub.db"
@@ -66,6 +66,44 @@ def create_db_and_tables() -> None:
     before calling this function via the lifespan handler.
     """
     SQLModel.metadata.create_all(engine)
+
+
+def run_migrations() -> None:
+    """
+    Apply additive schema migrations that `CREATE TABLE IF NOT EXISTS` cannot handle.
+
+    SQLModel's create_all() only creates missing tables — it never adds columns to
+    existing ones. This function uses raw SQL ALTER TABLE with error suppression to
+    idempotently add new columns introduced after the initial schema was deployed.
+
+    Pattern: `ALTER TABLE t ADD COLUMN c TYPE DEFAULT v` — SQLite returns
+    `OperationalError: duplicate column name` when the column already exists, which
+    we catch and ignore. This makes each migration step idempotent.
+
+    Add one entry per new column following the same pattern when future columns
+    are introduced.
+    """
+    migrations: list[str] = [
+        # C1: Structured story format fields (Phase 1)
+        "ALTER TABLE userstory ADD COLUMN priority TEXT DEFAULT 'medium'",
+        "ALTER TABLE userstory ADD COLUMN dependencies TEXT DEFAULT '[]'",
+        "ALTER TABLE userstory ADD COLUMN reference_links TEXT DEFAULT '[]'",
+        "ALTER TABLE userstory ADD COLUMN story_status TEXT DEFAULT 'open'",
+        # A1: Multi-transcript upload (Phase A1)
+        # The `transcript` table is a new table introduced in A1 and is created
+        # automatically by create_db_and_tables() via SQLModel.metadata.create_all().
+        # No ALTER TABLE is needed here. This comment documents the A1 boundary so
+        # future migration authors know the table was added in this phase.
+    ]
+
+    with engine.connect() as conn:
+        for ddl in migrations:
+            try:
+                conn.execute(sqlalchemy_text(ddl))
+            except Exception:
+                # Column already exists — safe to ignore.
+                pass
+        conn.commit()
 
 
 def get_session() -> Generator[Session, None, None]:

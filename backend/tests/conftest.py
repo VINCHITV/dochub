@@ -42,6 +42,10 @@ os.environ.setdefault("JIRA_BASE_URL", "https://test.atlassian.net")
 os.environ.setdefault("JIRA_EMAIL", "test@example.com")
 os.environ.setdefault("JIRA_API_TOKEN", "test-jira-token-not-real")
 os.environ.setdefault("JIRA_PROJECT_KEY", "TEST")
+# Redirect log output to a temp file so tests don't fail when dochub.log is
+# a directory (Docker bind-mount artefact) or when the CWD is read-only.
+import tempfile as _tempfile
+os.environ.setdefault("LOG_FILE", os.path.join(_tempfile.gettempdir(), "dochub_test.log"))
 
 
 # ---------------------------------------------------------------------------

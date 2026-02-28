@@ -12,6 +12,19 @@ export type WorkflowStatus =
   | 'JIRA_PUSH_SUCCESS'
   | 'COMPLETED'
 
+export interface GapEntry {
+  question: string
+  transcript_excerpt?: string
+}
+
+export interface ConflictEntry {
+  source_prd_id: string
+  conflicting_statement: string
+  proposed_change: string
+  severity: 'blocking' | 'needs_discussion' | 'minor'
+  kb_excerpt?: string
+}
+
 export interface PRDSections {
   title?: { title: string; subtitle?: string }
   description?: { overview: string }
@@ -19,7 +32,8 @@ export interface PRDSections {
   why?: { rationale: string; business_value: string }
   success?: { metrics: string[]; kpis: string[] }
   audience?: { primary_audience: string; personas: string[] }
-  open_questions?: { type1_conflicts: unknown[]; type2_gaps: string[] }
+  // type2_gaps accepts both old list[str] and new list[GapEntry] for backward compat
+  open_questions?: { type1_conflicts: ConflictEntry[]; type2_gaps: (GapEntry | string)[] }
 }
 
 export interface UserStory {
@@ -28,6 +42,11 @@ export interface UserStory {
   description: string
   acceptance_criteria: string[]
   validations: { field: string; rule: string; error_message: string }[]
+  priority?: 'high' | 'medium' | 'low'
+  dependencies?: string[]
+  reference_links?: string[]
+  story_status?: 'open' | 'done' | 'obsolete'
+  diff?: 'new' | 'modified' | 'kept'
 }
 
 interface PipelineState {
@@ -48,6 +67,7 @@ interface PipelineState {
   setStatus: (status: WorkflowStatus) => void
   upsertPRDSection: (key: string, data: unknown) => void
   addStory: (story: UserStory) => void
+  removeStoryById: (id: string) => void
   setJiraKeys: (keys: string[]) => void
   setHallucinations: (count: number) => void
   rehydrateFromServer: (project: {
@@ -84,7 +104,19 @@ export const usePipelineStore = create<PipelineState>()(
         })),
 
       addStory: (story) =>
-        set((state) => ({ stories: [...state.stories, story] })),
+        set((state) => {
+          // Upsert by id: replace existing story on re-generation, append if new
+          const idx = state.stories.findIndex((s) => s.id === story.id)
+          if (idx >= 0) {
+            const updated = [...state.stories]
+            updated[idx] = story
+            return { stories: updated }
+          }
+          return { stories: [...state.stories, story] }
+        }),
+
+      removeStoryById: (id) =>
+        set((state) => ({ stories: state.stories.filter((s) => s.id !== id) })),
 
       setJiraKeys: (keys) => set({ jiraKeys: keys }),
       setHallucinations: (count) => set({ hallucinations: count }),

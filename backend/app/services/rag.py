@@ -17,6 +17,7 @@ Invariants enforced here:
 
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from datetime import date
@@ -451,6 +452,7 @@ def save_prd_to_kb(
     project_id: str,
     product_area: str,
     collection: Collection,
+    transcript_doc_ids: Optional[list[str]] = None,
 ) -> str:
     """
     Index a generated PRD into the ChromaDB knowledge base.
@@ -472,6 +474,13 @@ def save_prd_to_kb(
         Product area name (e.g. "payments"). Used for deduplication and filtering.
     collection : chromadb.Collection
         The ChromaDB collection to index into.
+    transcript_doc_ids : list[str] | None
+        Optional list of transcript doc_ids (e.g. ["<project_id>-t0", "<project_id>-t1"])
+        to record in each chunk's metadata for source provenance tracking.
+        When provided, stored as a JSON-serialised string under the key
+        "transcript_doc_ids" in chunk metadata so ChromaDB (which requires
+        scalar metadata values) can store and filter on it.
+        Existing callers that omit this parameter are unaffected.
 
     Returns
     -------
@@ -558,6 +567,11 @@ def save_prd_to_kb(
             "embedding_model": EMBEDDING_MODEL,
             "project_id": project_id,
         }
+
+        # Store transcript source provenance when A1 multi-transcript upload is used.
+        # ChromaDB metadata values must be scalars, so we serialise the list to JSON.
+        if transcript_doc_ids is not None:
+            chunk_meta["transcript_doc_ids"] = json.dumps(transcript_doc_ids)
 
         ids.append(chunk_id)
         documents_list.append(node.get_content())

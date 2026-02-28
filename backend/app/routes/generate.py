@@ -39,6 +39,7 @@ from sqlmodel import Session, select
 
 from app.database import engine, get_session
 from app.models import PRDMetadata, Project, UserStory
+from app.services.story_diff import classify_stories
 from app.services.ai import (
     AudienceSection,
     CapabilityList,
@@ -498,10 +499,17 @@ async def _prd_stream(
         "    - conflicting_statement: quote the conflicting claim from the KB\n"
         "    - proposed_change: what the transcript proposes instead\n"
         "    - severity: 'blocking' | 'needs_discussion' | 'minor'\n"
+        "    - kb_excerpt: copy verbatim the 1-3 sentences from the KB chunk that show the conflict.\n"
+        "      Use the exact text from the [Source: ...] sections provided above.\n"
         "  If there are no conflicts, return an empty list — do NOT hallucinate conflicts.\n\n"
-        "TYPE 2 — Transcript Gaps (free-form questions):\n"
+        "TYPE 2 — Transcript Gaps (GapEntry objects):\n"
         "  List questions about ambiguities, missing details, or decisions the transcript\n"
-        "  left unresolved (e.g. scope boundaries, technical approach, compliance requirements).\n\n"
+        "  left unresolved (e.g. scope boundaries, technical approach, compliance requirements).\n"
+        "  For each gap:\n"
+        "    - question: the gap as a clear, answerable question\n"
+        "    - transcript_excerpt: copy 1-2 verbatim sentences from the TRANSCRIPT that prompted\n"
+        "      this question (the statement that reveals the gap or ambiguity). If the gap\n"
+        "      comes from complete absence of information, use an empty string.\n\n"
         "Ground every conflict in the KB context. Mark anything inferred as '(inferred)'."
     )
     user_open_questions = (
@@ -529,7 +537,7 @@ async def _prd_stream(
     generated_sections["open_questions"] = (
         "\n".join(f"[CONFLICT] {c.conflicting_statement}" for c in oq_result.type1_conflicts)
         + "\n"
-        + "\n".join(f"[GAP] {g}" for g in oq_result.type2_gaps)
+        + "\n".join(f"[GAP] {g.question}" for g in oq_result.type2_gaps)
     )
     section_dict = oq_result.model_dump()
     yield _sse({"section": "open_questions", "data": section_dict, "done": False})
@@ -671,11 +679,13 @@ async def generate_stories(
             detail=f"Project '{body.project_id}' not found.",
         )
 
-    if project.status != WorkflowStatus.PRD_APPROVED:
+    # Allow re-generation from STORIES_GENERATED (produces a diff against existing rows).
+    _allowed_for_stories = {WorkflowStatus.PRD_APPROVED, WorkflowStatus.STORIES_GENERATED}
+    if project.status not in _allowed_for_stories:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
-                f"Story generation requires status PRD_APPROVED; "
+                f"Story generation requires status PRD_APPROVED or STORIES_GENERATED; "
                 f"current status is '{project.status.value}'."
             ),
         )
@@ -697,8 +707,13 @@ async def generate_stories(
 
     project_id = project.id
 
+    # Load existing stories for diff comparison on re-generation.
+    existing_stories: list[UserStory] = list(
+        db.exec(select(UserStory).where(UserStory.project_id == project_id)).all()
+    )
+
     return StreamingResponse(
-        _stories_stream(project_id, prd_data),
+        _stories_stream(project_id, prd_data, existing_stories),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -710,6 +725,7 @@ async def generate_stories(
 async def _stories_stream(
     project_id: str,
     prd_data: dict,
+    existing_stories: "list[UserStory] | None" = None,
 ) -> AsyncGenerator[str, None]:
     """
     Async generator for the 3-step user story pipeline.
@@ -795,8 +811,19 @@ async def _stories_stream(
         "- acceptance_criteria: list covering happy path, at least one alternative path, "
         "and at least one error path. Each item is a complete sentence.\n"
         "- validations: list of field-level validation rules "
-        "(field, rule, error_message). Include at least one row per form field implied by the slice."
+        "(field, rule, error_message). Include at least one row per form field implied by the slice.\n"
+        "- priority: 'high' for must-have features (core user flow, blocking launch), "
+        "'medium' for should-have (significant value, not launch-blocking), "
+        "'low' for nice-to-have (enhancement, can defer). Base this on business impact from the PRD.\n"
+        "- dependencies: list of OTHER story titles (from the same slice list) that must be "
+        "completed before this story can begin. Use exact story titles. Empty list if none.\n"
+        "- reference_links: list of documentation URLs or knowledge base references relevant "
+        "to this story. Empty list if none."
     )
+
+    # Collect all generated story models before diffing and persisting.
+    # This allows classify_stories() to compare the full new set against existing rows.
+    generated_story_models: list[UserStoryModel] = []
 
     for idx, slice_description in enumerate(slices):
         yield _HEARTBEAT
@@ -820,45 +847,105 @@ async def _stories_stream(
             yield _sse({"error": f"Story {idx + 1} generation failed: {exc}", "done": True})
             return
 
-        # Persist UserStory row immediately (durable partial results).
-        # Each story gets its own short-lived session so a failure on one story
-        # does not leave a previous story's commit uncommitted.
-        with Session(engine) as db:
-            story_row = UserStory(
-                project_id=project_id,
-                title=story_model.title,
-                description=story_model.description,
-                acceptance_criteria=json.dumps(story_model.acceptance_criteria),
-                validations=json.dumps(
-                    [v.model_dump() for v in story_model.validations]
-                ),
-            )
-            db.add(story_row)
-            db.commit()
-            db.refresh(story_row)
-            story_id = story_row.id
+        generated_story_models.append(story_model)
 
-        # Stream story_done event — deserialise stored JSON back to list for the client
+    # ------------------------------------------------------------------
+    # Diff new stories against existing rows (if any)
+    # ------------------------------------------------------------------
+    diff_result = classify_stories(
+        existing=existing_stories or [],
+        new_models=generated_story_models,
+    )
+
+    # ------------------------------------------------------------------
+    # Persist diff results and stream story_done events
+    # ------------------------------------------------------------------
+    for entry in diff_result.entries:
+        with Session(engine) as db:
+            if entry.classification == "new":
+                sm = entry.new_model
+                story_row = UserStory(
+                    project_id=project_id,
+                    title=sm.title,
+                    description=sm.description,
+                    acceptance_criteria=json.dumps(sm.acceptance_criteria),
+                    validations=json.dumps([v.model_dump() for v in sm.validations]),
+                    priority=sm.priority,
+                    dependencies=json.dumps(sm.dependencies),
+                    reference_links=json.dumps(sm.reference_links),
+                    story_status="open",
+                )
+                db.add(story_row)
+                db.commit()
+                db.refresh(story_row)
+                story_id = story_row.id
+
+            elif entry.classification == "modified":
+                sm = entry.new_model
+                existing_row = db.get(UserStory, entry.existing_id)
+                if existing_row is not None:
+                    existing_row.title = sm.title
+                    existing_row.description = sm.description
+                    existing_row.acceptance_criteria = json.dumps(sm.acceptance_criteria)
+                    existing_row.validations = json.dumps([v.model_dump() for v in sm.validations])
+                    existing_row.priority = sm.priority
+                    existing_row.dependencies = json.dumps(sm.dependencies)
+                    existing_row.reference_links = json.dumps(sm.reference_links)
+                    db.add(existing_row)
+                    db.commit()
+                story_id = entry.existing_id
+
+            elif entry.classification == "kept":
+                story_id = entry.existing_id
+
+            else:  # obsolete
+                obsolete_row = db.get(UserStory, entry.existing_id)
+                if obsolete_row is not None and obsolete_row.story_status != "done":
+                    obsolete_row.story_status = "obsolete"
+                    db.add(obsolete_row)
+                    db.commit()
+                # Emit a diff event (no story_done for obsolete)
+                yield _sse({
+                    "step": "story_diff",
+                    "classification": "obsolete",
+                    "story_id": entry.existing_id,
+                    "title": entry.existing_title,
+                })
+                continue
+
+        # Stream story_done event for new/modified/kept stories
+        sm = entry.new_model
         yield _sse({
             "step": "story_done",
             "story": {
                 "id": story_id,
-                "title": story_model.title,
-                "description": story_model.description,
-                "acceptance_criteria": story_model.acceptance_criteria,
-                "validations": [v.model_dump() for v in story_model.validations],
+                "title": sm.title,
+                "description": sm.description,
+                "acceptance_criteria": sm.acceptance_criteria,
+                "validations": [v.model_dump() for v in sm.validations],
+                "priority": sm.priority,
+                "dependencies": sm.dependencies,
+                "reference_links": sm.reference_links,
+                "story_status": "open" if entry.classification in ("new", "modified") else "done",
             },
+            "diff": entry.classification,
         })
 
     # ------------------------------------------------------------------
     # Advance workflow: PRD_APPROVED → STORIES_GENERATED
+    # Re-generation from STORIES_GENERATED: already at the correct status.
+    # advance_status is idempotent — calling it when already at STORIES_GENERATED
+    # returns without error (it just detects it's already there).
     # ------------------------------------------------------------------
     advance_error: Optional[str] = None
     with Session(engine) as db:
         try:
             advance_status(project_id, WorkflowStatus.PRD_APPROVED, db)
         except HTTPException as exc:
-            advance_error = exc.detail
+            # 409 here means the status was not PRD_APPROVED — i.e. it was
+            # STORIES_GENERATED (re-generation pass). That is expected and fine.
+            if "STORIES_GENERATED" not in exc.detail:
+                advance_error = exc.detail
 
     if advance_error is not None:
         yield _sse({"error": f"Workflow advance failed: {advance_error}", "done": True})
@@ -899,7 +986,11 @@ def _flatten_prd_for_prompts(prd_data: dict) -> str:
                 continue
             if isinstance(value, list):
                 for item in value:
-                    lines.append(f"  - {item}")
+                    if isinstance(item, dict):
+                        # GapEntry objects: show question text only
+                        lines.append(f"  - {item.get('question', item)}")
+                    else:
+                        lines.append(f"  - {item}")
             elif value is not None:
                 lines.append(f"  {field}: {value}")
 

@@ -125,3 +125,42 @@ Phase 2 files: `services/versions.py`, `services/workflow.py`, `models.py`, `dat
 - All 6 env vars log WARNING on missing at startup — do NOT crash startup
 - Jira route raises HTTP 503 at request time if Jira vars missing (`_require_jira_env()`)
 - AI vars allow running without Anthropic/OpenAI during CI import checks
+
+## A1: Multi-Transcript Upload (implemented 2026-02-28)
+- New `Transcript` SQLModel table in `models.py` (between UserStory and JiraTicket)
+  - `doc_id` format: `<project_id>-t<sort_order>` (0-based, continuous across calls)
+  - `sort_order` = count of existing rows at insert time; never reset to 0
+- New route: `POST /upload/transcripts/{project_id}` in `routes/upload.py`
+  - `files: List[UploadFile]` — use `List` from `typing`, not `list` bare (FastAPI 0.115 multipart)
+  - Status guard: 409 if `project.status != TRANSCRIPT_UPLOADED`
+  - Merge: `"\n\n".join(f"--- [Source: {t.filename}] ---\n\n{t.raw_text}" for t in all_transcripts)`
+  - `db.flush()` + `db.refresh(t)` to get generated IDs before final `db.commit()`
+- `save_prd_to_kb` gained optional `transcript_doc_ids: Optional[list[str]] = None`
+  - Stored as `json.dumps(list)` in chunk metadata (ChromaDB requires scalar values)
+- Tests: `backend/tests/test_multi_transcript.py` — 12 tests
+
+## Test Environment Note
+- `.venv` (Python 3.13) — run `.venv/bin/pip install -r requirements.txt` before tests
+- Static syntax check: `python3 -c "import ast; ast.parse(open(f).read())"` works without venv
+- `dochub.log` is a directory in dev environment — conftest.py sets `LOG_FILE` to a temp file:
+  `os.environ.setdefault("LOG_FILE", os.path.join(tempfile.gettempdir(), "dochub_test.log"))`
+  Must be set BEFORE `from app.main import app` (main.py opens the log file at import time)
+
+## B1: Upload Refined PRD (implemented 2026-02-28)
+- Route: `POST /projects/{project_id}/upload-refined-prd` in `routes/projects.py`
+- Request: `multipart/form-data` with `file: UploadFile` (.docx only, 422 for anything else)
+- Allowed statuses: `{PRD_GENERATED, PRD_APPROVED}` — stored in `_REFINED_PRD_ALLOWED_STATUSES` frozenset
+- If `PRD_APPROVED`: resets to `PRD_GENERATED` via direct write (intentional backward transition — only valid use)
+- open_questions is ALWAYS regenerated from KB; never taken from the DOCX file
+- RAG retrieval failure is non-fatal (logs warning, proceeds with empty rag_context)
+- `_build_section_dict(key, text) -> dict` converts flat text to prd_json nested format per section model
+- Mocking pattern for tests: patch at `app.routes.projects.generate_section`,
+  `app.routes.projects.get_chroma_client`, `app.routes.projects.get_or_create_collection`,
+  and monkeypatch `app.routes.projects.HybridRetriever.retrieve` to return `[]`
+
+## Route URL Map — Updated (B1)
+- `GET /projects/{id}` → projects.router
+- `POST /projects/{id}/approve` → projects.router
+- `POST /projects/{id}/upload-refined-prd` → projects.router (NEW — B1)
+- `POST /upload` → upload.router
+- `POST /upload/transcripts/{id}` → upload.router (A1)

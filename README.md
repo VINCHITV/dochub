@@ -9,6 +9,7 @@
 ## Table of Contents
 
 - [Prerequisites](#prerequisites)
+- [Technical Architecture](#technical-architecture)
 - [Getting API Keys](#getting-api-keys)
 - [Option A: Docker Compose (recommended)](#option-a-docker-compose-recommended)
 - [Option B: Local Development](#option-b-local-development)
@@ -19,6 +20,14 @@
 - [How the Pipeline Works](#how-the-pipeline-works)
 - [Troubleshooting](#troubleshooting)
 - [Pre-Demo Checklist](#pre-demo-checklist)
+
+---
+
+## Technical Architecture
+
+For a detailed technical deep-dive (architecture, data model, workflows, SSE contracts, RAG internals, Jira rollback semantics, and frontend state flow), see:
+
+- [`TECHNICAL_DESCRIPTION.md`](./TECHNICAL_DESCRIPTION.md)
 
 ---
 

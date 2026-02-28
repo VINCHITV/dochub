@@ -31,6 +31,7 @@ from app.services.ai import (
     CapabilityList,
     ConflictEntry,
     DescriptionSection,
+    GapEntry,
     OpenQuestionsSection,
     PRDSections,
     ProblemSection,
@@ -254,6 +255,25 @@ class TestConflictEntry:
         )
         assert entry.severity == "minor"
 
+    def test_kb_excerpt_defaults_to_empty_string(self):
+        entry = ConflictEntry(
+            source_prd_id="payments-v1",
+            conflicting_statement="Old system used batch processing.",
+            proposed_change="Switch to real-time processing.",
+            severity="blocking",
+        )
+        assert entry.kb_excerpt == ""
+
+    def test_kb_excerpt_accepts_string(self):
+        entry = ConflictEntry(
+            source_prd_id="payments-v1",
+            conflicting_statement="Statement",
+            proposed_change="Change",
+            severity="minor",
+            kb_excerpt="The previous PRD specified batch processing at midnight.",
+        )
+        assert "batch" in entry.kb_excerpt
+
     def test_invalid_severity_raises(self):
         with pytest.raises(ValidationError) as exc_info:
             ConflictEntry(
@@ -264,6 +284,16 @@ class TestConflictEntry:
             )
         errors = exc_info.value.errors()
         assert any("severity" in str(e["loc"]) for e in errors)
+
+    def test_all_fields_required_except_kb_excerpt(self):
+        # All required fields present, kb_excerpt omitted → valid
+        entry = ConflictEntry(
+            source_prd_id="id",
+            conflicting_statement="s",
+            proposed_change="p",
+            severity="minor",
+        )
+        assert entry.kb_excerpt == ""
 
     def test_missing_source_prd_id_raises(self):
         with pytest.raises(ValidationError):
@@ -279,6 +309,32 @@ class TestConflictEntry:
 
 
 # ---------------------------------------------------------------------------
+# GapEntry
+# ---------------------------------------------------------------------------
+
+class TestGapEntry:
+    def test_valid_with_question_only(self):
+        entry = GapEntry(question="What is the compliance scope?")
+        assert entry.question == "What is the compliance scope?"
+        assert entry.transcript_excerpt == ""
+
+    def test_valid_with_transcript_excerpt(self):
+        entry = GapEntry(
+            question="What is the fallback if Apple Pay fails?",
+            transcript_excerpt="We need Apple Pay for iOS users, but didn't discuss a fallback.",
+        )
+        assert "fallback" in entry.transcript_excerpt
+
+    def test_missing_question_raises(self):
+        with pytest.raises(ValidationError):
+            GapEntry()  # type: ignore[call-arg]
+
+    def test_transcript_excerpt_defaults_to_empty_string(self):
+        entry = GapEntry(question="Q")
+        assert entry.transcript_excerpt == ""
+
+
+# ---------------------------------------------------------------------------
 # OpenQuestionsSection
 # ---------------------------------------------------------------------------
 
@@ -291,14 +347,18 @@ class TestOpenQuestionsSection:
             severity="needs_discussion",
         )
 
+    def _make_gap(self) -> GapEntry:
+        return GapEntry(question="What is the fallback if Apple Pay fails?")
+
     def test_valid_with_conflicts_and_gaps(self):
         section = OpenQuestionsSection(
             type1_conflicts=[self._make_conflict()],
-            type2_gaps=["What is the fallback if Apple Pay fails?"],
+            type2_gaps=[self._make_gap()],
         )
         assert len(section.type1_conflicts) == 1
         assert isinstance(section.type1_conflicts[0], ConflictEntry)
         assert len(section.type2_gaps) == 1
+        assert isinstance(section.type2_gaps[0], GapEntry)
 
     def test_empty_lists_are_valid(self):
         section = OpenQuestionsSection(type1_conflicts=[], type2_gaps=[])
@@ -312,16 +372,23 @@ class TestOpenQuestionsSection:
                 type2_gaps=[],
             )
 
-    def test_type2_gaps_must_be_list_of_strings(self):
+    def test_type2_gaps_must_be_list_of_gap_entries(self):
         with pytest.raises(ValidationError):
             OpenQuestionsSection(
                 type1_conflicts=[],
-                type2_gaps=[{"not": "a string"}],  # type: ignore[list-item]
+                type2_gaps=["bare string not accepted"],  # type: ignore[list-item]
+            )
+
+    def test_type2_gaps_dict_missing_question_raises(self):
+        with pytest.raises(ValidationError):
+            OpenQuestionsSection(
+                type1_conflicts=[],
+                type2_gaps=[{"not": "a gap entry"}],  # type: ignore[list-item]
             )
 
     def test_missing_type1_conflicts_raises(self):
         with pytest.raises(ValidationError):
-            OpenQuestionsSection(type2_gaps=["gap"])  # type: ignore[call-arg]
+            OpenQuestionsSection(type2_gaps=[self._make_gap()])  # type: ignore[call-arg]
 
     def test_missing_type2_gaps_raises(self):
         with pytest.raises(ValidationError):
@@ -348,7 +415,7 @@ class TestPRDSections:
             "success": SuccessSection(metrics=["Metric 1"], kpis=["KPI 1"]),
             "audience": AudienceSection(primary_audience="Users"),
             "open_questions": OpenQuestionsSection(
-                type1_conflicts=[], type2_gaps=["Gap 1"]
+                type1_conflicts=[], type2_gaps=[GapEntry(question="Gap 1")]
             ),
         }
 
@@ -360,7 +427,7 @@ class TestPRDSections:
         assert sections.why.rationale == "Because"
         assert sections.success.metrics == ["Metric 1"]
         assert sections.audience.primary_audience == "Users"
-        assert sections.open_questions.type2_gaps == ["Gap 1"]
+        assert sections.open_questions.type2_gaps[0].question == "Gap 1"
 
     def test_missing_any_section_raises(self):
         data = self._make_all_sections()
@@ -516,3 +583,42 @@ class TestUserStoryModel:
         data["validations"] = []
         story = UserStoryModel(**data)
         assert story.validations == []
+
+    def test_priority_defaults_to_medium(self):
+        story = UserStoryModel(**self._make_story())
+        assert story.priority == "medium"
+
+    def test_priority_accepts_valid_literals(self):
+        for p in ("high", "medium", "low"):
+            data = self._make_story()
+            data["priority"] = p
+            story = UserStoryModel(**data)
+            assert story.priority == p
+
+    def test_priority_rejects_invalid_value(self):
+        data = self._make_story()
+        data["priority"] = "critical"
+        with pytest.raises(ValidationError) as exc_info:
+            UserStoryModel(**data)
+        errors = exc_info.value.errors()
+        assert any("priority" in str(e["loc"]) for e in errors)
+
+    def test_dependencies_defaults_to_empty_list(self):
+        story = UserStoryModel(**self._make_story())
+        assert story.dependencies == []
+
+    def test_dependencies_accepts_list_of_strings(self):
+        data = self._make_story()
+        data["dependencies"] = ["User can log in", "User can view profile"]
+        story = UserStoryModel(**data)
+        assert len(story.dependencies) == 2
+
+    def test_reference_links_defaults_to_empty_list(self):
+        story = UserStoryModel(**self._make_story())
+        assert story.reference_links == []
+
+    def test_reference_links_accepts_list_of_strings(self):
+        data = self._make_story()
+        data["reference_links"] = ["https://docs.example.com/auth"]
+        story = UserStoryModel(**data)
+        assert story.reference_links == ["https://docs.example.com/auth"]

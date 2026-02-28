@@ -92,12 +92,30 @@ class ConflictEntry(BaseModel):
     - blocking: must be resolved before any implementation can begin
     - needs_discussion: stakeholder alignment required, not a hard blocker
     - minor: informational; track but don't block
+
+    kb_excerpt: verbatim text from the KB chunk that motivated this conflict.
+    Populated by the LLM from the rag_context. Empty string if unavailable.
     """
 
     source_prd_id: str
     conflicting_statement: str
     proposed_change: str
     severity: Literal["blocking", "needs_discussion", "minor"]
+    kb_excerpt: str = ""
+
+
+class GapEntry(BaseModel):
+    """
+    A single transcript gap or ambiguity (Type 2 open question).
+
+    question: the gap or ambiguity as a clear, answerable question.
+    transcript_excerpt: 1-2 verbatim sentences from the transcript that reveal
+    the gap (e.g. the statement that prompted this question). Empty if the gap
+    comes from the absence of information rather than a specific statement.
+    """
+
+    question: str
+    transcript_excerpt: str = ""
 
 
 class OpenQuestionsSection(BaseModel):
@@ -105,11 +123,11 @@ class OpenQuestionsSection(BaseModel):
     Type 1 conflicts (KB contradictions) + Type 2 gaps (transcript ambiguities).
 
     type1_conflicts: structured ConflictEntry objects derived from RAG retrieval.
-    type2_gaps: free-form questions about gaps or ambiguities in the transcript.
+    type2_gaps: structured GapEntry objects with question + transcript context.
     """
 
     type1_conflicts: list[ConflictEntry]
-    type2_gaps: list[str]
+    type2_gaps: list[GapEntry]
     source_doc_ids: list[str] = []
 
 
@@ -162,12 +180,18 @@ class UserStoryModel(BaseModel):
     description must follow: "As a <persona>, I want <action>, so that <value>."
     acceptance_criteria should cover happy path, alternative paths, and error paths.
     validations is the field-level validation table (e.g. email format, required fields).
+    priority reflects business value: 'high' for must-have, 'medium' for should-have, 'low' for nice-to-have.
+    dependencies lists story titles that must be completed before this one.
+    reference_links lists relevant documentation URLs or knowledge base references.
     """
 
     title: str
     description: str
     acceptance_criteria: list[str]
     validations: list[ValidationRow]
+    priority: Literal["high", "medium", "low"] = "medium"
+    dependencies: list[str] = []
+    reference_links: list[str] = []
 
 
 # ---------------------------------------------------------------------------

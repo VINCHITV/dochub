@@ -158,7 +158,84 @@ class UserStory(SQLModel, table=True):
     validations: str = Field(
         description="JSON-serialized list[dict] of field-level validation rules.",
     )
+    priority: str = Field(
+        default="medium",
+        description="Story priority: 'high' | 'medium' | 'low'. Set by LLM at generation time.",
+    )
+    dependencies: str = Field(
+        default="[]",
+        description="JSON-serialized list[str] of dependent story titles or labels.",
+    )
+    reference_links: str = Field(
+        default="[]",
+        description="JSON-serialized list[str] of reference URLs or doc identifiers.",
+    )
+    story_status: str = Field(
+        default="open",
+        description="Lifecycle status: 'open' | 'done' | 'obsolete'. Updated by workflow events.",
+    )
     created_at: datetime = Field(default_factory=_now)
+
+
+# ---------------------------------------------------------------------------
+# Transcript
+# ---------------------------------------------------------------------------
+
+
+class Transcript(SQLModel, table=True):
+    """
+    Stores a single uploaded transcript file for a Project.
+
+    A Project may have multiple Transcript rows — one per file uploaded via
+    POST /upload/transcripts/{project_id}.  The merged content of all rows
+    (ordered by sort_order) is written back to Project.transcript_text after
+    each batch upload so the PRD generation route always reads a single
+    coherent string.
+
+    doc_id format: '<project_id>-t<n>' where n is sort_order (0-based).
+    This makes each transcript chunk traceable in RAG metadata.
+
+    Design: Transcript rows are append-only.  Adding transcripts after
+    PRD generation starts (status != TRANSCRIPT_UPLOADED) is rejected with
+    HTTP 409 to prevent incoherence between the stored transcript and any
+    already-generated PRD sections.
+    """
+
+    __tablename__ = "transcript"  # type: ignore[assignment]
+
+    id: str = Field(
+        default_factory=_new_uuid,
+        primary_key=True,
+        description="UUID v4 string, server-generated on insert.",
+    )
+    project_id: str = Field(
+        foreign_key="project.id",
+        index=True,
+        description="FK to Project.id.",
+    )
+    filename: str = Field(
+        description="Original filename as provided by the HTTP upload (e.g. 'meeting-2024.txt').",
+    )
+    raw_text: str = Field(
+        description="Parsed plain-text content extracted from the uploaded file.",
+    )
+    doc_id: str = Field(
+        description=(
+            "Source-tracking identifier in the format '<project_id>-t<n>' where n is sort_order. "
+            "Stored in RAG chunk metadata so retrieved nodes can be traced to a specific transcript."
+        ),
+    )
+    sort_order: int = Field(
+        default=0,
+        description=(
+            "0-based insertion index within this project's transcript set. "
+            "Determines the order of concatenation when building Project.transcript_text."
+        ),
+    )
+    created_at: datetime = Field(
+        default_factory=_now,
+        description="UTC timestamp of row creation.",
+    )
 
 
 # ---------------------------------------------------------------------------

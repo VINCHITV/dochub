@@ -1,7 +1,7 @@
 'use client'
 
 import ReactMarkdown from 'react-markdown'
-import { PRDSections } from '@/store/pipelineStore'
+import { PRDSections, ConflictEntry, GapEntry } from '@/store/pipelineStore'
 
 const SECTION_ORDER = [
   'title',
@@ -48,14 +48,22 @@ function sectionToMarkdown(key: string, data: unknown): string {
       return `**Primary:** ${d.primary_audience ?? ''}\n${d.secondary_audience ? `\n**Secondary:** ${d.secondary_audience}` : ''}\n\n${personas.map((p) => `- ${p}`).join('\n')}`
     }
     case 'open_questions': {
-      const gaps = Array.isArray(d.type2_gaps) ? d.type2_gaps : []
-      const conflicts = Array.isArray(d.type1_conflicts) ? d.type1_conflicts : []
+      const rawGaps = Array.isArray(d.type2_gaps) ? d.type2_gaps : []
+      const conflicts = Array.isArray(d.type1_conflicts) ? d.type1_conflicts as ConflictEntry[] : []
+      const conflictLines = conflicts.map((c) => {
+        const line = `- [${c.severity}] ${c.conflicting_statement} → ${c.proposed_change}`
+        return c.kb_excerpt ? `${line}\n\n  > ${c.kb_excerpt}` : line
+      })
+      const gapLines = rawGaps.map((g) => {
+        if (typeof g === 'string') return `- ${g}`
+        const entry = g as GapEntry
+        return entry.transcript_excerpt
+          ? `- ${entry.question}\n\n  > ${entry.transcript_excerpt}`
+          : `- ${entry.question}`
+      })
       return [
-        conflicts.length > 0 ? `**KB Conflicts:**\n${conflicts.map((c: unknown) => {
-          const conflict = c as Record<string, unknown>
-          return `- [${conflict.severity}] ${conflict.conflicting_statement} → ${conflict.proposed_change}`
-        }).join('\n')}` : '',
-        gaps.length > 0 ? `**Transcript Gaps:**\n${gaps.map((g) => `- ${g}`).join('\n')}` : '',
+        conflicts.length > 0 ? `**KB Conflicts:**\n${conflictLines.join('\n')}` : '',
+        rawGaps.length > 0 ? `**Transcript Gaps:**\n${gapLines.join('\n')}` : '',
       ].filter(Boolean).join('\n\n')
     }
     default:

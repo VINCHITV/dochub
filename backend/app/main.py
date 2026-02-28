@@ -121,7 +121,7 @@ logger = structlog.get_logger(__name__)
 #    create_db_and_tables() runs inside the lifespan handler.
 # ---------------------------------------------------------------------------
 import app.models  # noqa: F401, E402 — side-effect import for SQLModel metadata registration
-from app.database import create_db_and_tables  # noqa: E402
+from app.database import create_db_and_tables, run_migrations  # noqa: E402
 from app.services.versions import PRD_PROMPT_VERSION  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -189,6 +189,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("dochub.startup", prompt_version=PRD_PROMPT_VERSION)
     startup_check()
     create_db_and_tables()
+    run_migrations()
     logger.info("dochub.ready", message="Database tables created/verified. Application ready.")
 
     yield
