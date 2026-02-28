@@ -1,12 +1,12 @@
 """
 backend/app/services/ai.py
 
-All Pydantic section/story models and instructor-patched AsyncAnthropic wrappers.
+All Pydantic section/story models and instructor-patched AsyncOpenAI wrappers.
 
 Design notes:
-- instructor.from_anthropic with Mode.ANTHROPIC_TOOLS is required for structured
-  output via tool-calling on the Anthropic API.
-- AsyncAnthropic() is required — never use the sync Anthropic() in async routes.
+- instructor.from_openai with AsyncOpenAI() is used for structured output via
+  tool-calling on the OpenAI API.
+- AsyncOpenAI() is required — never use the sync OpenAI() in async routes.
 - Every generate_section() call logs an llm_call structlog event with token counts
   and latency for full observability.
 - Model strings always come from services.versions — never hardcoded here.
@@ -19,7 +19,7 @@ from typing import Any, Literal, Optional, Type, TypeVar
 
 import instructor
 import structlog
-from anthropic import AsyncAnthropic
+from openai import AsyncOpenAI
 from pydantic import BaseModel
 
 from app.services.versions import GENERATOR_MODEL, PRD_PROMPT_VERSION
@@ -30,12 +30,7 @@ logger = structlog.get_logger()
 # instructor-patched async client — module-level singleton
 # ---------------------------------------------------------------------------
 
-# Mode.ANTHROPIC_TOOLS uses Anthropic tool-calling for structured extraction,
-# which is the correct mode for instructor + Anthropic (not JSON mode).
-instructor_client = instructor.from_anthropic(
-    AsyncAnthropic(),
-    mode=instructor.Mode.ANTHROPIC_TOOLS,
-)
+instructor_client = instructor.from_openai(AsyncOpenAI())
 
 # ---------------------------------------------------------------------------
 # PRD Section Pydantic models
@@ -233,19 +228,20 @@ async def generate_section(
     output_tokens = 0
 
     try:
-        pydantic_model, completion = await instructor_client.messages.create_with_completion(
+        pydantic_model, completion = await instructor_client.chat.completions.create_with_completion(
             model=GENERATOR_MODEL,
-            max_tokens=4096,
             max_retries=3,
-            messages=[{"role": "user", "content": user_prompt}],
-            system=system_prompt,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
             response_model=section_model,
         )
 
         # Extract token usage from the raw completion object
         if hasattr(completion, "usage") and completion.usage is not None:
-            input_tokens = completion.usage.input_tokens or 0
-            output_tokens = completion.usage.output_tokens or 0
+            input_tokens = completion.usage.prompt_tokens or 0
+            output_tokens = completion.usage.completion_tokens or 0
 
     except Exception:
         latency_ms = (time.monotonic() - start_ts) * 1000

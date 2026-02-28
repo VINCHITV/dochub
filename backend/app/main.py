@@ -130,7 +130,6 @@ from app.services.versions import PRD_PROMPT_VERSION  # noqa: E402
 # AI vars are also WARNING-only to allow CI import checks without real keys.
 # ---------------------------------------------------------------------------
 _REQUIRED_VARS: list[tuple[str, str]] = [
-    ("ANTHROPIC_API_KEY", "warning"),
     ("OPENAI_API_KEY", "warning"),
     ("JIRA_BASE_URL", "warning"),
     ("JIRA_EMAIL", "warning"),

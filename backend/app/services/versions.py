@@ -12,13 +12,13 @@ Rules:
   (e.g. "show all PRDs generated with prd-v1.1 that need regeneration").
 """
 
-GENERATOR_MODEL: str = "claude-sonnet-4-6"
+GENERATOR_MODEL: str = "gpt-4o"
 """Primary model for PRD section generation and user story generation."""
 
 EMBEDDING_MODEL: str = "text-embedding-3-small"
 """OpenAI embedding model used for ChromaDB vector indexing and retrieval."""
 
-EXTRACTOR_MODEL: str = "claude-sonnet-4-6"
+EXTRACTOR_MODEL: str = "gpt-4o"
 """Model used for PRDMetadata extraction (product_area, date, doc_id) after PRD save."""
 
 PRD_PROMPT_VERSION: str = "prd-v1.2"

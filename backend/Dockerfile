@@ -2,13 +2,15 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# System deps for python-docx and chromadb
+# System deps for python-docx (lxml needs libxml2/libxslt dev headers on ARM64)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    libxml2-dev \
+    libxslt-dev \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --timeout 300 --retries 5 -r requirements.txt
 
 COPY . .
 
