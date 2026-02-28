@@ -16,6 +16,8 @@ interface OpenQuestionsPanelProps {
   onSave: () => void
   saving: boolean
   saved: boolean
+  onRegenerate?: () => void
+  regenerating?: boolean
 }
 
 function ConflictItem({
@@ -115,6 +117,8 @@ export function OpenQuestionsPanel({
   onSave,
   saving,
   saved,
+  onRegenerate,
+  regenerating,
 }: OpenQuestionsPanelProps) {
   const hasContent = conflicts.length > 0 || gaps.length > 0
 
@@ -163,20 +167,28 @@ export function OpenQuestionsPanel({
         </div>
       )}
 
-      <div className="flex items-center gap-3 pt-1">
+      <div className="flex items-center gap-3 pt-1 flex-wrap">
         <button
           onClick={onSave}
-          disabled={saving}
+          disabled={saving || regenerating}
           className="bg-indigo-600 text-white text-sm font-semibold rounded-lg px-4 py-2 hover:bg-indigo-700 disabled:opacity-40 transition-colors"
         >
           {saving ? 'Saving…' : 'Save Answers'}
         </button>
-        {saved && (
+
+        {saved && onRegenerate && (
+          <button
+            onClick={onRegenerate}
+            disabled={regenerating}
+            className="bg-green-600 text-white text-sm font-semibold rounded-lg px-4 py-2 hover:bg-green-700 disabled:opacity-40 transition-colors"
+          >
+            {regenerating ? 'Regenerating PRD…' : '↻ Regenerate PRD with Answers'}
+          </button>
+        )}
+
+        {saved && !onRegenerate && (
           <span className="text-sm text-green-600 font-medium">✓ Answers saved</span>
         )}
-        <span className="text-xs text-gray-400 ml-auto">
-          Answers are stored and will inform future PRD refinement
-        </span>
       </div>
     </div>
   )

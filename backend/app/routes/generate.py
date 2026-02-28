@@ -152,21 +152,32 @@ async def generate_prd(
             detail=f"Project '{body.project_id}' not found.",
         )
 
-    if project.status != WorkflowStatus.TRANSCRIPT_UPLOADED:
+    # Allow re-generation from PRD_GENERATED (user saved answers and wants a refresh).
+    _allowed_for_prd = {WorkflowStatus.TRANSCRIPT_UPLOADED, WorkflowStatus.PRD_GENERATED}
+    if project.status not in _allowed_for_prd:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
-                f"PRD generation requires status TRANSCRIPT_UPLOADED; "
+                f"PRD generation requires status TRANSCRIPT_UPLOADED or PRD_GENERATED; "
                 f"current status is '{project.status.value}'."
             ),
         )
 
+    # Load saved Q&A answers to inject into section prompts
+    qa_answers: dict = {}
+    if project.qa_answers:
+        try:
+            qa_answers = json.loads(project.qa_answers)
+        except json.JSONDecodeError:
+            qa_answers = {}
+
+    is_regeneration = project.status == WorkflowStatus.PRD_GENERATED
     transcript_text: str = project.transcript_text or ""
     project_id: str = project.id
     project_name: str = project.name
 
     return StreamingResponse(
-        _prd_stream(project_id, project_name, transcript_text),
+        _prd_stream(project_id, project_name, transcript_text, qa_answers=qa_answers, is_regeneration=is_regeneration),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -179,6 +190,8 @@ async def _prd_stream(
     project_id: str,
     project_name: str,
     transcript_text: str,
+    qa_answers: Optional[dict] = None,
+    is_regeneration: bool = False,
 ) -> AsyncGenerator[str, None]:
     """
     Async generator that drives the 7-section PRD generation pipeline.
@@ -239,6 +252,27 @@ async def _prd_stream(
         rag_context_parts.append(f"[Source: {doc_id} / {section}]\n{text}")
     rag_context = "\n\n---\n\n".join(rag_context_parts) if rag_context_parts else "(No prior knowledge base context available for this product area.)"
 
+    # Build Q&A context from saved PM answers (injected into every section prompt
+    # so the LLM can close gaps and respect conflict decisions throughout the PRD).
+    qa_context = ""
+    if qa_answers:
+        qa_lines: list[str] = []
+        for key, answer in qa_answers.items():
+            if not answer or not answer.strip():
+                continue
+            if key.startswith("gap:"):
+                q = key[4:]
+                qa_lines.append(f"Gap question: {q}\nPM answer: {answer.strip()}")
+            elif key.startswith("conflict:"):
+                c = key[9:]
+                qa_lines.append(f"Conflict with '{c}' — PM decision: {answer.strip()}")
+        if qa_lines:
+            qa_context = (
+                "PM HAS PROVIDED THE FOLLOWING ANSWERS TO PREVIOUS OPEN QUESTIONS.\n"
+                "Use these answers to resolve ambiguities and close gaps in the PRD:\n\n"
+                + "\n\n".join(qa_lines)
+            )
+
     # ------------------------------------------------------------------
     # Step 2 — Generate 7 sections sequentially
     # ------------------------------------------------------------------
@@ -267,7 +301,8 @@ async def _prd_stream(
     user_title = (
         f"TRANSCRIPT:\n{transcript_text}\n\n"
         f"KNOWLEDGE BASE CONTEXT (prior PRDs):\n{rag_context}\n\n"
-        "Write the Title section."
+        + (f"{qa_context}\n\n" if qa_context else "")
+        + "Write the Title section."
     )
 
     try:
@@ -305,7 +340,8 @@ async def _prd_stream(
         f"TRANSCRIPT:\n{transcript_text}\n\n"
         f"KNOWLEDGE BASE CONTEXT (prior PRDs):\n{rag_context}\n\n"
         f"SECTIONS GENERATED SO FAR:\n{_sections_so_far()}\n\n"
-        "Write the Description section."
+        + (f"{qa_context}\n\n" if qa_context else "")
+        + "Write the Description section."
     )
 
     try:
@@ -342,7 +378,8 @@ async def _prd_stream(
         f"TRANSCRIPT:\n{transcript_text}\n\n"
         f"KNOWLEDGE BASE CONTEXT (prior PRDs):\n{rag_context}\n\n"
         f"SECTIONS GENERATED SO FAR:\n{_sections_so_far()}\n\n"
-        "Write the Problem Statement section."
+        + (f"{qa_context}\n\n" if qa_context else "")
+        + "Write the Problem Statement section."
     )
 
     try:
@@ -382,7 +419,8 @@ async def _prd_stream(
         f"TRANSCRIPT:\n{transcript_text}\n\n"
         f"KNOWLEDGE BASE CONTEXT (prior PRDs):\n{rag_context}\n\n"
         f"SECTIONS GENERATED SO FAR:\n{_sections_so_far()}\n\n"
-        "Write the Why section."
+        + (f"{qa_context}\n\n" if qa_context else "")
+        + "Write the Why section."
     )
 
     try:
@@ -419,7 +457,8 @@ async def _prd_stream(
         f"TRANSCRIPT:\n{transcript_text}\n\n"
         f"KNOWLEDGE BASE CONTEXT (prior PRDs):\n{rag_context}\n\n"
         f"SECTIONS GENERATED SO FAR:\n{_sections_so_far()}\n\n"
-        "Write the Success Metrics section."
+        + (f"{qa_context}\n\n" if qa_context else "")
+        + "Write the Success Metrics section."
     )
 
     try:
@@ -461,7 +500,8 @@ async def _prd_stream(
         f"TRANSCRIPT:\n{transcript_text}\n\n"
         f"KNOWLEDGE BASE CONTEXT (prior PRDs):\n{rag_context}\n\n"
         f"SECTIONS GENERATED SO FAR:\n{_sections_so_far()}\n\n"
-        "Write the Target Audience section."
+        + (f"{qa_context}\n\n" if qa_context else "")
+        + "Write the Target Audience section."
     )
 
     try:
@@ -516,7 +556,8 @@ async def _prd_stream(
         f"TRANSCRIPT:\n{transcript_text}\n\n"
         f"KNOWLEDGE BASE CONTEXT (prior PRDs — check these for Type 1 conflicts):\n{rag_context}\n\n"
         f"SECTIONS GENERATED SO FAR:\n{_sections_so_far()}\n\n"
-        "Write the Open Questions & Risks section. Include both Type 1 conflicts and Type 2 gaps."
+        + (f"{qa_context}\n\nIMPORTANT: For any gap or conflict where the PM has already provided an answer above, do NOT list it as an open question — it has been resolved. Only list gaps and conflicts that are still unanswered.\n\n" if qa_context else "")
+        + "Write the Open Questions & Risks section. Include both Type 1 conflicts and Type 2 gaps."
     )
 
     try:
@@ -579,11 +620,14 @@ async def _prd_stream(
             db.add(project)
             db.commit()
 
-            # Advance workflow status: TRANSCRIPT_UPLOADED → PRD_GENERATED
-            try:
-                advance_status(project_id, WorkflowStatus.TRANSCRIPT_UPLOADED, db)
-            except HTTPException as exc:
-                _prd_advance_error = exc.detail
+            # Advance workflow status: TRANSCRIPT_UPLOADED → PRD_GENERATED.
+            # On re-generation (is_regeneration=True) the project is already at
+            # PRD_GENERATED — just overwrite prd_json in-place, no state advance needed.
+            if not is_regeneration:
+                try:
+                    advance_status(project_id, WorkflowStatus.TRANSCRIPT_UPLOADED, db)
+                except HTTPException as exc:
+                    _prd_advance_error = exc.detail
 
         # Index PRD to ChromaDB knowledge base (sync — offloaded to threadpool).
         # Only run if project was found and status advanced successfully.

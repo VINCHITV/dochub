@@ -139,11 +139,12 @@ export default function WorkflowPage() {
     }
   }
 
-  // Generate PRD
+  // Generate PRD (first gen or re-gen with answers)
   const handleGeneratePRD = async () => {
     if (!store.projectId) return
     setGeneratingPRD(true)
     setSSEError(null)
+    setAnswersSaved(false)
     await streamPRD(`${API}/generate/prd`, { project_id: store.projectId })
   }
 
@@ -370,6 +371,8 @@ export default function WorkflowPage() {
                   onSave={handleSaveAnswers}
                   saving={savingAnswers}
                   saved={answersSaved}
+                  onRegenerate={handleGeneratePRD}
+                  regenerating={generatingPRD}
                 />
               </div>
             )}
