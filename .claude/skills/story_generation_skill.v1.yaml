@@ -1,0 +1,34 @@
+id: story_generation_skill_v1
+name: Story Generation Skill
+version: 1
+description: >
+  Given a validated PRD, produce (max 7) vertically-sliced user stories.
+  Follows a 3-step pipeline: capability extraction, slice planning, per-story expansion.
+inputs:
+  - name: prd_document
+    type: PRDDocument
+    required: true
+outputs:
+  - name: stories
+    type: list[UserStory]
+    description: |
+      UserStory:
+        title: string
+        description: string   # As a..., I want..., So that...
+        acceptance_criteria: list[string]
+        validations: list[{input: string, expected: string}]
+runbook: |
+  1. Extract capabilities from PRD (list distinct user actions).
+  2. Plan 3-7 slices. Prefer vertical slices (full-stack). For each slice include a one-line rationale.
+  3. For each slice, expand into a UserStory: Title, Description (As a..), 3-6 acceptance criteria (happy, alt, error), validations table covering valid, invalid, boundary, error states.
+  4. Enforce max 7 stories. If candidate >7, merge closely related slices with rationales.
+  5. Validate each story against schema.
+constraints:
+  - "Stories must be independently shippable (no hidden dependencies)."
+examples:
+  - input:
+      prd_document: {...}
+    output:
+      stories:
+        - title: "Allow user to update payment method"
+          description: "As a subscriber, I want to update..."

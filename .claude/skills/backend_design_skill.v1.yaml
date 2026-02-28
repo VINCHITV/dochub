@@ -1,0 +1,27 @@
+id: backend_design_skill_v1
+name: Backend Design Skill
+version: 1
+description: >
+  Runbook for backend architecture decisions: DB schema, state machine, optimistic locking,
+  background workers, docker-compose structure, and logging strategy.
+inputs:
+  - name: change_request
+    type: string
+    required: true
+outputs:
+  - name: design_artifact
+    type: text
+    description: "Migration files, SQLModel classes, docker-compose snippet, or plan"
+runbook: |
+  1. Read change_request and project constraints (Iteration 1).
+  2. Propose minimal, safe DB schema changes (prefer backward-compatible).
+  3. Provide migration steps and rollback plan.
+  4. Provide docker-compose snippet if infra change required.
+  5. Return design_artifact with code blocks and tests to add.
+constraints:
+  - "Prefer safe, iterative changes that do not require data loss."
+examples:
+  - input:
+      change_request: "Migrate from SQLite to Postgres+pgvector"
+    output:
+      design_artifact: "SQLModel migration scripts, docker-compose, and reindex plan"

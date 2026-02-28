@@ -1,0 +1,44 @@
+id: prd_generation_skill_v1
+name: PRD Generation Skill
+version: 1
+description: >
+  Generate a validated 7-section PRD from a meeting transcript plus retrieved context.
+  Must label any inferred content and not fabricate specific metrics. Outputs a Pydantic-style
+  PRDDocument matching the schema: title, description, problem, why, success, audience, open_questions.
+inputs:
+  - name: transcript_text
+    type: string
+    required: true
+  - name: retrieved_context
+    type: list
+    required: false
+outputs:
+  - name: prd_document
+    type: PRDDocument
+    description: |
+      PRDDocument:
+        title: string
+        description: string
+        problem: string
+        why: string
+        success: string
+        audience: string
+        open_questions: list[ConflictEntry | GapEntry]
+runbook: |
+  1. Read transcript_text and retrieved_context.
+  2. For each PRD section in the canonical order: generate content limited to 250-800 words.
+  3. If content is not present in transcript or retrieved_context, add a short inference clause and prefix with "(Inferred)".
+  4. Do NOT invent metrics (if a number is generated, it must reference a source). If no source, mark as Inferred and set provenance=null.
+  5. Validate output shape against PRDDocument schema.
+  6. Return prd_document JSON.
+constraints:
+  - "Do not include unrelated marketing copy."
+  - "Keep language formal and concise."
+examples:
+  - input:
+      transcript_text: "User cannot change subscription without calling support..."
+      retrieved_context: []
+    output:
+      prd_document:
+        title: "Subscription Self-Service"
+        description: "Add subscription UI to change plan without support..."

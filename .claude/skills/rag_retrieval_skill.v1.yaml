@@ -1,0 +1,34 @@
+id: rag_retrieval_skill_v1
+name: RAG Retrieval & Conflict Detection Skill
+version: 1
+description: >
+  Run hybrid retrieval (vector + BM25) and surface top-N chunks and conflict entries.
+  Enforce filtering status="active". Return retrieval snapshot and ConflictEntry objects.
+inputs:
+  - name: query_text
+    type: string
+    required: true
+  - name: product_area
+    type: string
+    required: false
+outputs:
+  - name: retrieval_snapshot
+    type: list
+    description: "List of {doc_id, section, snippet, semantic_score, bm25_score, merged_rank}"
+  - name: conflicts
+    type: list[ConflictEntry]
+runbook: |
+  1. Apply metadata filter (status=active, optional product_area).
+  2. Execute vector search (top_k=20) and BM25 on doc chunks.
+  3. Merge ranks using RRF (configurable k, default 20).
+  4. Format retrieval_snapshot for logging.
+  5. For Type 1 conflicts: run targeted LLM prompt that compares transcript/PRD to each retrieved chunk and outputs ConflictEntry: {source_prd_id, conflicting_statement, proposed_change, severity}.
+  6. Return retrieval_snapshot + conflicts.
+constraints:
+  - "Always include retrieval snapshot for auditability."
+examples:
+  - input:
+      query_text: "notifications redesign"
+    output:
+      retrieval_snapshot: [...]
+      conflicts: [...]

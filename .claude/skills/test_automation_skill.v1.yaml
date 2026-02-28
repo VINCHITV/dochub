@@ -1,0 +1,25 @@
+id: test_automation_skill_v1
+name: Test Automation Skill
+version: 1
+description: >
+  Create deterministic tests and mocks for LLM and Jira; generate pytest fixtures and example test cases.
+inputs:
+  - name: target_component
+    type: string
+    required: true
+outputs:
+  - name: test_suite
+    type: text
+    description: "pytest tests and fixture code"
+runbook: |
+  1. For LLM steps, provide a mock LLM server response harness (LLM_MODE=mock).
+  2. For Jira, provide mocked httpx AsyncClient or a fake server (JIRA_MODE=mock).
+  3. Create E2E tests: transcript -> PRD -> stories -> mocked Jira push.
+  4. Include failure scenarios for rollback tests.
+constraints:
+  - "Tests must be runnable locally without API keys."
+examples:
+  - input:
+      target_component: "jira_push"
+    output:
+      test_suite: "pytest test ensuring cleanup on second-create failure"
