@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:registry.npmjs.org)",
+      "WebFetch(domain:pypi.org)",
+      "Bash(docker info:*)",
+      "Bash(docker compose:*)",
+      "Bash(npm install:*)",
+      "Bash(docker pull:*)",
+      "Bash(.venv/bin/python:*)",
+      "Bash(python3:*)",
+      "Bash(ls:*)",
+      "Bash(/Users/manishsingh/workspace/dochub/backend/.venv/bin/python3.13:*)",
+      "Bash(npm run:*)",
+      "Bash(node_modules/.bin/tsc:*)",
+      "Bash(node:*)",
+      "Bash(python:*)",
+      "Bash(source:*)",
+      "Bash(.venv/bin/pip install:*)",
+      "Bash(/Users/manishsingh/.pyenv/versions/3.12.9/bin/python:*)",
+      "Bash(/Users/manishsingh/workspace/dochub/backend/dochub-be/bin/python:*)",
+      "Bash(.venv/bin/pytest:*)",
+      "Bash(xargs sh:*)",
+      "Bash(/opt/anaconda3/bin/python:*)"
+    ]
+  },
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": true
+  }
+}
